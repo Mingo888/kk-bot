@@ -4,6 +4,9 @@ import asyncio
 import requests
 import pytz
 import os
+import json
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
@@ -12,15 +15,51 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 nest_asyncio.apply()
 
 # --- 設定區 ---
-# 嘗試從環境變數讀取，如果沒有就用預設字串 (方便 Railway 設定)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAFMVu3NZR4Em6VuWTUe1vdklTrn28mnZPY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
+SHEET_NAME = 'KK報價機器人紀錄' # 您的試算表名稱
 # ----------------------------
 
 def get_taipei_now():
     tw_tz = pytz.timezone('Asia/Taipei')
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
+# --- Google Sheet 寫入功能 ---
+def log_to_google_sheet(user_data):
+    """將使用者資料寫入 Google Sheet"""
+    try:
+        # 從環境變數讀取 JSON 金鑰
+        json_creds = os.getenv('GOOGLE_CREDENTIALS')
+        if not json_creds:
+            print("❌ 錯誤：找不到 GOOGLE_CREDENTIALS 環境變數")
+            return
+
+        # 解析 JSON 並設定驗證
+        creds_dict = json.loads(json_creds)
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+
+        # 開啟試算表
+        sheet = client.open(SHEET_NAME).sheet1
+        
+        # 準備要寫入的一列資料
+        row = [
+            get_taipei_now(),
+            user_data['full_name'],
+            str(user_data['id']),
+            f"@{user_data['username']}",
+            "啟動機器人 / 查詢"
+        ]
+        
+        # 寫入資料
+        sheet.append_row(row)
+        print(f"✅ 已寫入 Google Sheet: {user_data['full_name']}")
+        
+    except Exception as e:
+        print(f"❌ 寫入 Google Sheet 失敗: {e}")
+
+# --- 價格查詢函數 ---
 def get_bitopro_price():
     url = "https://api.bitopro.com/v3/tickers/usdt_twd"
     try:
@@ -40,7 +79,6 @@ def get_binance_cny_third_price():
         data = response.json()
         ads = data.get('data', [])
         valid_ads = [ad for ad in ads if 6.0 <= float(ad['adv']['price']) <= 9.0]
-        
         if len(valid_ads) >= 3:
             target = valid_ads[2]
             return {"price": float(target['adv']['price']), "name": target['advertiser']['nickName']}
@@ -66,7 +104,19 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, user):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # 1. 通知管理員 (Telegram)
     await notify_admin(context, user)
+    
+    # 2. 寫入 Google Sheet (非同步執行，避免卡住機器人)
+    user_data = {
+        'full_name': user.full_name,
+        'id': user.id,
+        'username': user.username if user.username else '無'
+    }
+    # 使用 asyncio.to_thread 在背景執行寫入，不影響回覆速度
+    asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
+
     keyboard = [['🇨🇳 U兌人民幣', '💱 台幣兌人民幣'], ['🇹🇼 U兌台幣', '🚀 台幣兌U']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     welcome_text = "✨ **KK 匯率報價助手已就緒**\n━━━━━━━━━━━━━━━━━━\n選擇查詢項目或直接聯絡『可愛的米果』@nk5219 👇"
@@ -121,7 +171,7 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("🚀 Railway 機器人已啟動 (GitHub 修正版)...")
+    print("🚀 Railway 機器人已啟動 (含 Google Sheet 寫入)...")
     await app.initialize(); await app.start(); await app.updater.start_polling()
     while True: await asyncio.sleep(1)
 
