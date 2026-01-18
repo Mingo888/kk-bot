@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import nest_asyncio
 import asyncio
 import requests
@@ -118,7 +119,7 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("?? Railway 機器人已啟動...")
+    print("?? Railway 機器人已啟動 (編碼修正版)...")
     await app.initialize(); await app.start(); await app.updater.start_polling()
     while True: await asyncio.sleep(1)
 
