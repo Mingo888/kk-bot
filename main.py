@@ -3,16 +3,18 @@ import nest_asyncio
 import asyncio
 import requests
 import pytz
+import os
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 
-# ¶³ºİÀô¹Ò³]©w
+# é›²ç«¯ç’°å¢ƒè¨­å®š
 nest_asyncio.apply()
 
-# --- ³]©w°Ï ---
-TELEGRAM_TOKEN = '8429894936:AAFMVu3NZR4Em6VuWTUe1vdklTrn28mnZPY'
-ADMIN_ID = 7767209131
+# --- è¨­å®šå€ ---
+# å˜—è©¦å¾ç’°å¢ƒè®Šæ•¸è®€å–ï¼Œå¦‚æœæ²’æœ‰å°±ç”¨é è¨­å­—ä¸² (æ–¹ä¾¿ Railway è¨­å®š)
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAFMVu3NZR4Em6VuWTUe1vdklTrn28mnZPY')
+ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
 # ----------------------------
 
 def get_taipei_now():
@@ -50,24 +52,24 @@ def get_binance_cny_third_price():
 
 def get_function_inline_kb():
     kb = [
-        [InlineKeyboardButton("???? U§I¤H¥Á¹ô", callback_data="switch_cny"),
-         InlineKeyboardButton("???? U§I¥x¹ô", callback_data="switch_u2tw")],
-        [InlineKeyboardButton("?? ¥x¹ô§IU", callback_data="switch_tw2u"),
-         InlineKeyboardButton("?? ¥x¹ô§I¤H¥Á¹ô", callback_data="switch_tw2cny")]
+        [InlineKeyboardButton("ğŸ‡¨ğŸ‡³ Uå…Œäººæ°‘å¹£", callback_data="switch_cny"),
+         InlineKeyboardButton("ğŸ‡¹ğŸ‡¼ Uå…Œå°å¹£", callback_data="switch_u2tw")],
+        [InlineKeyboardButton("ğŸš€ å°å¹£å…ŒU", callback_data="switch_tw2u"),
+         InlineKeyboardButton("ğŸ’± å°å¹£å…Œäººæ°‘å¹£", callback_data="switch_tw2cny")]
     ]
     return InlineKeyboardMarkup(kb)
 
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, user):
-    msg = f"?? **·s¥Î¤á³qª¾**\n?? {user.full_name}\n?? `{user.id}`\n@{user.username}"
+    msg = f"ğŸ”” **æ–°ç”¨æˆ¶é€šçŸ¥**\nğŸ‘¤ {user.full_name}\nğŸ†” `{user.id}`\n@{user.username}"
     try: await context.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode='Markdown')
     except: pass
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await notify_admin(context, user)
-    keyboard = [['???? U§I¤H¥Á¹ô', '?? ¥x¹ô§I¤H¥Á¹ô'], ['???? U§I¥x¹ô', '?? ¥x¹ô§IU']]
+    keyboard = [['ğŸ‡¨ğŸ‡³ Uå…Œäººæ°‘å¹£', 'ğŸ’± å°å¹£å…Œäººæ°‘å¹£'], ['ğŸ‡¹ğŸ‡¼ Uå…Œå°å¹£', 'ğŸš€ å°å¹£å…ŒU']]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    welcome_text = "? **KK ¶×²v³ø»ù§U¤â¤w´Nºü**\n??????????????????\n¿ï¾Ü¬d¸ß¶µ¥Ø©Îª½±µÁpµ¸¡y¥i·Rªº¦ÌªG¡z@nk5219 ??"
+    welcome_text = "âœ¨ **KK åŒ¯ç‡å ±åƒ¹åŠ©æ‰‹å·²å°±ç·’**\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\né¸æ“‡æŸ¥è©¢é …ç›®æˆ–ç›´æ¥è¯çµ¡ã€å¯æ„›çš„ç±³æœã€@nk5219 ğŸ‘‡"
     await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def send_price_message(update_or_query, mode):
@@ -79,16 +81,16 @@ async def send_price_message(update_or_query, mode):
     if mode == "cny":
         data = get_binance_cny_third_price()
         if data:
-            msg = f"?? **³ø»ùµ²ªG¡G???? USDT §I ¤H¥Á¹ô**\n?? ¬d¸ß®É¶¡¡G`{now}`\n??????????????????\n\n?? **§Y®É³ø»ù¡G{data['price']:.2f} CNY**\n?? °Ñ¦Ò°Ó®a¡G{data['name']}\n\n?? *¨Ó·½¡G¹ô¦w P2P (²Ä3ÀÉ)*"
+            msg = f"ğŸ“‹ **å ±åƒ¹çµæœï¼šğŸ‡¨ğŸ‡³ USDT å…Œ äººæ°‘å¹£**\nğŸ•’ æŸ¥è©¢æ™‚é–“ï¼š`{now}`\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\nğŸ‘‰ **å³æ™‚å ±åƒ¹ï¼š{data['price']:.2f} CNY**\nğŸ‘¤ åƒè€ƒå•†å®¶ï¼š{data['name']}\n\nâš ï¸ *ä¾†æºï¼šå¹£å®‰ P2P (ç¬¬3æª”)*"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
-        else: await func("?? **¼Æ¾ÚÀò¨ú¥¢±Ñ**¡A½Ğµy«á¦A¸Õ¡C", reply_markup=kb)
+        else: await func("âš ï¸ **æ•¸æ“šç²å–å¤±æ•—**ï¼Œè«‹ç¨å¾Œå†è©¦ã€‚", reply_markup=kb)
 
     elif mode in ["u2tw", "tw2u"]:
         raw = get_bitopro_price()
         if raw:
             final = raw + 0.4 if mode == "tw2u" else raw
-            title = "?? ¥x¹ô §I USDT" if mode == "tw2u" else "???? USDT §I ¥x¹ô"
-            msg = f"?? **³ø»ùµ²ªG¡G{title}**\n?? ¬d¸ß®É¶¡¡G`{now}`\n??????????????????\n\n?? **§Y®É³ø»ù¡G{final:.2f} TWD**\n\n?? *³ø»ù¶È¨Ñ°Ñ¦Ò¡C*"
+            title = "ğŸš€ å°å¹£ å…Œ USDT" if mode == "tw2u" else "ğŸ‡¹ğŸ‡¼ USDT å…Œ å°å¹£"
+            msg = f"ğŸ“‹ **å ±åƒ¹çµæœï¼š{title}**\nğŸ•’ æŸ¥è©¢æ™‚é–“ï¼š`{now}`\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\nğŸ‘‰ **å³æ™‚å ±åƒ¹ï¼š{final:.2f} TWD**\n\nâš ï¸ *å ±åƒ¹åƒ…ä¾›åƒè€ƒã€‚*"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
 
     elif mode == "tw2cny":
@@ -96,16 +98,16 @@ async def send_price_message(update_or_query, mode):
         cny_data = get_binance_cny_third_price()
         if raw_bito and cny_data:
             final_rate = (raw_bito + 0.4) / cny_data['price']
-            msg = f"?? **³ø»ùµ²ªG¡G?? ¥x¹ô §I ¤H¥Á¹ô**\n?? ¬d¸ß®É¶¡¡G`{now}`\n??????????????????\n\n?? **´«ºâ¶×²v¡G{final_rate:.3f}**\n(¨C 1 ¤H¥Á¹ô ¬ù»İ {final_rate:.3f} ¥x¹ô)\n\n?? *³Æµù¡G¬O¥HUSDT ¥»¦ì­pºâ¤§µ²ªG*"
+            msg = f"ğŸ“‹ **å ±åƒ¹çµæœï¼šğŸ’± å°å¹£ å…Œ äººæ°‘å¹£**\nğŸ•’ æŸ¥è©¢æ™‚é–“ï¼š`{now}`\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\nğŸ‘‰ **æ›ç®—åŒ¯ç‡ï¼š{final_rate:.3f}**\n(æ¯ 1 äººæ°‘å¹£ ç´„éœ€ {final_rate:.3f} å°å¹£)\n\nğŸ’¡ *å‚™è¨»ï¼šæ˜¯ä»¥USDT æœ¬ä½è¨ˆç®—ä¹‹çµæœ*"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
-        else: await func("?? **µLªk­pºâ**\n¼È®ÉµLªkÀò¨ú¼Æ¾Ú¡A½Ğµy«á¦A¸Õ¡C", reply_markup=kb)
+        else: await func("âš ï¸ **ç„¡æ³•è¨ˆç®—**\næš«æ™‚ç„¡æ³•ç²å–æ•¸æ“šï¼Œè«‹ç¨å¾Œå†è©¦ã€‚", reply_markup=kb)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if '???? U§I¤H¥Á¹ô' in text: await send_price_message(update, "cny")
-    elif '???? U§I¥x¹ô' in text: await send_price_message(update, "u2tw")
-    elif '?? ¥x¹ô§IU' in text: await send_price_message(update, "tw2u")
-    elif '?? ¥x¹ô§I¤H¥Á¹ô' in text: await send_price_message(update, "tw2cny")
+    if 'ğŸ‡¨ğŸ‡³ Uå…Œäººæ°‘å¹£' in text: await send_price_message(update, "cny")
+    elif 'ğŸ‡¹ğŸ‡¼ Uå…Œå°å¹£' in text: await send_price_message(update, "u2tw")
+    elif 'ğŸš€ å°å¹£å…ŒU' in text: await send_price_message(update, "tw2u")
+    elif 'ğŸ’± å°å¹£å…Œäººæ°‘å¹£' in text: await send_price_message(update, "tw2cny")
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
@@ -119,7 +121,7 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("?? Railway ¾÷¾¹¤H¤w±Ò°Ê (½s½X­×¥¿ª©)...")
+    print("ğŸš€ Railway æ©Ÿå™¨äººå·²å•Ÿå‹• (GitHub ä¿®æ­£ç‰ˆ)...")
     await app.initialize(); await app.start(); await app.updater.start_polling()
     while True: await asyncio.sleep(1)
 
