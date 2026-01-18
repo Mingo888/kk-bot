@@ -2,3 +2,5 @@ python-telegram-bot
 requests
 pytz
 nest_asyncio
+gspread
+oauth2client
