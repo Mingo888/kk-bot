@@ -17,7 +17,10 @@ nest_asyncio.apply()
 # --- 設定區 ---
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAFMVu3NZR4Em6VuWTUe1vdklTrn28mnZPY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
-SHEET_NAME = 'KK報價機器人紀錄' # 您的試算表名稱
+SHEET_NAME = 'KK報價機器人紀錄'
+
+# 🔥【新功能】預設加碼數值 (重啟後會恢復此數值)
+CURRENT_SPREAD = 0.4 
 # ----------------------------
 
 def get_taipei_now():
@@ -26,38 +29,17 @@ def get_taipei_now():
 
 # --- Google Sheet 寫入功能 ---
 def log_to_google_sheet(user_data):
-    """將使用者資料寫入 Google Sheet"""
     try:
-        # 從環境變數讀取 JSON 金鑰
         json_creds = os.getenv('GOOGLE_CREDENTIALS')
-        if not json_creds:
-            print("❌ 錯誤：找不到 GOOGLE_CREDENTIALS 環境變數")
-            return
-
-        # 解析 JSON 並設定驗證
+        if not json_creds: return
         creds_dict = json.loads(json_creds)
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
-
-        # 開啟試算表
         sheet = client.open(SHEET_NAME).sheet1
-        
-        # 準備要寫入的一列資料
-        row = [
-            get_taipei_now(),
-            user_data['full_name'],
-            str(user_data['id']),
-            f"@{user_data['username']}",
-            "啟動機器人 / 查詢"
-        ]
-        
-        # 寫入資料
+        row = [get_taipei_now(), user_data['full_name'], str(user_data['id']), f"@{user_data['username']}", "啟動/查詢"]
         sheet.append_row(row)
-        print(f"✅ 已寫入 Google Sheet: {user_data['full_name']}")
-        
-    except Exception as e:
-        print(f"❌ 寫入 Google Sheet 失敗: {e}")
+    except Exception as e: print(f"Sheet Error: {e}")
 
 # --- 價格查詢函數 ---
 def get_bitopro_price():
@@ -102,19 +84,29 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, user):
     try: await context.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode='Markdown')
     except: pass
 
+# 🔥【新功能】設定加碼值的指令
+async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global CURRENT_SPREAD
+    user_id = update.effective_user.id
+    
+    # 權限檢查：只有管理員能用
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("⛔ 您沒有權限執行此指令。")
+        return
+
+    try:
+        # 讀取指令後面的數字 (例如 /set 0.5)
+        new_value = float(context.args[0])
+        CURRENT_SPREAD = new_value
+        await update.message.reply_text(f"✅ **設定成功！**\n目前的加碼值已更新為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
+    except (IndexError, ValueError):
+        await update.message.reply_text(f"⚠️ **格式錯誤**\n請輸入 `/set 數字`\n例如：`/set 0.5`\n\n目前數值為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    
-    # 1. 通知管理員 (Telegram)
     await notify_admin(context, user)
     
-    # 2. 寫入 Google Sheet (非同步執行，避免卡住機器人)
-    user_data = {
-        'full_name': user.full_name,
-        'id': user.id,
-        'username': user.username if user.username else '無'
-    }
-    # 使用 asyncio.to_thread 在背景執行寫入，不影響回覆速度
+    user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
     keyboard = [['🇨🇳 U兌人民幣', '💱 台幣兌人民幣'], ['🇹🇼 U兌台幣', '🚀 台幣兌U']]
@@ -138,8 +130,10 @@ async def send_price_message(update_or_query, mode):
     elif mode in ["u2tw", "tw2u"]:
         raw = get_bitopro_price()
         if raw:
-            final = raw + 0.4 if mode == "tw2u" else raw
+            # 🔥 使用變數計算 (U兌台幣不加碼，台幣兌U加碼)
+            final = (raw + CURRENT_SPREAD) if mode == "tw2u" else raw
             title = "🚀 台幣 兌 USDT" if mode == "tw2u" else "🇹🇼 USDT 兌 台幣"
+            
             msg = f"📋 **報價結果：{title}**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{final:.2f} TWD**\n\n⚠️ *報價僅供參考。*"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
 
@@ -147,7 +141,9 @@ async def send_price_message(update_or_query, mode):
         raw_bito = get_bitopro_price()
         cny_data = get_binance_cny_third_price()
         if raw_bito and cny_data:
-            final_rate = (raw_bito + 0.4) / cny_data['price']
+            # 🔥 使用變數計算交叉匯率
+            final_rate = (raw_bito + CURRENT_SPREAD) / cny_data['price']
+            
             msg = f"📋 **報價結果：💱 台幣 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **換算匯率：{final_rate:.3f}**\n(每 1 人民幣 約需 {final_rate:.3f} 台幣)\n\n💡 *備註：是以USDT 本位計算之結果*"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
         else: await func("⚠️ **無法計算**\n暫時無法獲取數據，請稍後再試。", reply_markup=kb)
@@ -168,10 +164,12 @@ async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("price", start))
+    # 🔥 註冊新指令 /set
+    app.add_handler(CommandHandler("set", set_spread))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("🚀 Railway 機器人已啟動 (含 Google Sheet 寫入)...")
+    print("🚀 Railway 機器人已啟動 (含動態加碼指令)...")
     await app.initialize(); await app.start(); await app.updater.start_polling()
     while True: await asyncio.sleep(1)
 
