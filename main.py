@@ -19,7 +19,7 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAFMVu3NZR4Em6VuWTUe1vd
 ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
 SHEET_NAME = 'KK報價機器人紀錄'
 
-# 🔥【新功能】預設加碼數值 (重啟後會恢復此數值)
+# 預設加碼數值
 CURRENT_SPREAD = 0.4 
 # ----------------------------
 
@@ -84,18 +84,13 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, user):
     try: await context.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode='Markdown')
     except: pass
 
-# 🔥【新功能】設定加碼值的指令
 async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CURRENT_SPREAD
     user_id = update.effective_user.id
-    
-    # 權限檢查：只有管理員能用
     if user_id != ADMIN_ID:
         await update.message.reply_text("⛔ 您沒有權限執行此指令。")
         return
-
     try:
-        # 讀取指令後面的數字 (例如 /set 0.5)
         new_value = float(context.args[0])
         CURRENT_SPREAD = new_value
         await update.message.reply_text(f"✅ **設定成功！**\n目前的加碼值已更新為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
@@ -106,6 +101,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await notify_admin(context, user)
     
+    # 寫入 Google Sheet
     user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
@@ -130,20 +126,26 @@ async def send_price_message(update_or_query, mode):
     elif mode in ["u2tw", "tw2u"]:
         raw = get_bitopro_price()
         if raw:
-            # 🔥 使用變數計算 (U兌台幣不加碼，台幣兌U加碼)
+            # 判斷是否加碼 (tw2u 加碼, u2tw 原價)
             final = (raw + CURRENT_SPREAD) if mode == "tw2u" else raw
             title = "🚀 台幣 兌 USDT" if mode == "tw2u" else "🇹🇼 USDT 兌 台幣"
             
-            msg = f"📋 **報價結果：{title}**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{final:.2f} TWD**\n\n⚠️ *報價僅供參考。*"
+            msg = f"📋 **報價結果：{title}**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
+            msg += f"👉 **即時報價：{final:.2f} TWD**\n\n"
+            
+            # 🔥 這裡依據不同模式顯示不同備註 🔥
+            if mode == "tw2u":
+                msg += f"⚠️ 本報價參考台灣銀行美元現金銀行賣出價及當下C2C市場波動浮動調整。"
+            else:
+                msg += f"⚠️ 報價是參考台灣幣托實時報價"
+            
             await func(msg, parse_mode='Markdown', reply_markup=kb)
 
     elif mode == "tw2cny":
         raw_bito = get_bitopro_price()
         cny_data = get_binance_cny_third_price()
         if raw_bito and cny_data:
-            # 🔥 使用變數計算交叉匯率
             final_rate = (raw_bito + CURRENT_SPREAD) / cny_data['price']
-            
             msg = f"📋 **報價結果：💱 台幣 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **換算匯率：{final_rate:.3f}**\n(每 1 人民幣 約需 {final_rate:.3f} 台幣)\n\n💡 *備註：是以USDT 本位計算之結果*"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
         else: await func("⚠️ **無法計算**\n暫時無法獲取數據，請稍後再試。", reply_markup=kb)
@@ -164,12 +166,11 @@ async def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("price", start))
-    # 🔥 註冊新指令 /set
     app.add_handler(CommandHandler("set", set_spread))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("🚀 Railway 機器人已啟動 (含動態加碼指令)...")
+    print("🚀 Railway 機器人已啟動 (U兌台幣備註修正版)...")
     await app.initialize(); await app.start(); await app.updater.start_polling()
     while True: await asyncio.sleep(1)
 
