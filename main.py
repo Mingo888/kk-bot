@@ -70,12 +70,15 @@ def get_binance_cny_third_price():
         return None
     except: return None
 
+# 🔥 修改點：新增 TRX 能量兌換按鈕
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
          InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw")],
         [InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u"),
-         InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")]
+         InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")],
+        # 👇 新增這一行：導流到您的 TRX 機器人
+        [InlineKeyboardButton("⚡️ TRX能量兌換", url="https://t.me/kk168usdt_bot")]
     ]
     return InlineKeyboardMarkup(kb)
 
@@ -133,7 +136,6 @@ async def send_price_message(update_or_query, mode):
             msg = f"📋 **報價結果：{title}**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
             msg += f"👉 **即時報價：{final:.2f} TWD**\n\n"
             
-            # 🔥 這裡依據不同模式顯示不同備註 🔥
             if mode == "tw2u":
                 msg += f"⚠️ 本報價參考台灣銀行美元現金銀行賣出價及當下C2C市場波動浮動調整。"
             else:
@@ -170,10 +172,8 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("🚀 Railway 機器人已啟動 (U兌台幣備註修正版)...")
+    print("🚀 Railway 機器人已啟動 (TRX按鈕版)...")
     await app.initialize(); await app.start(); await app.updater.start_polling()
     while True: await asyncio.sleep(1)
 
-if __name__ == '__main__':
-    try: asyncio.get_event_loop().run_until_complete(main())
-    except: pass
+if __
