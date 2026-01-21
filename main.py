@@ -5,7 +5,6 @@ import requests
 import pytz
 import os
 import json
-import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
@@ -20,8 +19,6 @@ nest_asyncio.apply()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAFMVu3NZR4Em6VuWTUe1vdklTrn28mnZPY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
 SHEET_NAME = 'KK報價機器人紀錄'
-
-# 預設加碼數值
 CURRENT_SPREAD = 0.4 
 # ----------------------------
 
@@ -29,7 +26,7 @@ def get_taipei_now():
     tw_tz = pytz.timezone('Asia/Taipei')
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-# --- Google Sheet 寫入功能 ---
+# --- Google Sheet 寫入 ---
 def log_to_google_sheet(user_data):
     try:
         json_creds = os.getenv('GOOGLE_CREDENTIALS')
@@ -43,7 +40,7 @@ def log_to_google_sheet(user_data):
         sheet.append_row(row)
     except Exception as e: print(f"Sheet Error: {e}")
 
-# --- 價格查詢函數 ---
+# --- 價格查詢 ---
 def get_bitopro_price():
     url = "https://api.bitopro.com/v3/tickers/usdt_twd"
     try:
@@ -72,14 +69,13 @@ def get_binance_cny_third_price():
         return None
     except: return None
 
-# 🔥 功能選單 (已更新正確 ID)
+# 🔥 功能選單
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
          InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw")],
         [InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u"),
          InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")],
-        # 👇 這裡已更新為 KKfreetron_Bot
         [InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]
     ]
     return InlineKeyboardMarkup(kb)
@@ -106,11 +102,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await notify_admin(context, user)
     
-    # 寫入 Google Sheet
     user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
-    # 底部選單
     keyboard = [
         ['🇨🇳 U兌人民幣', '💱 台幣兌人民幣'],
         ['🇹🇼 U兌台幣', '🚀 台幣兌U'],
@@ -156,7 +150,6 @@ async def send_price_message(update_or_query, mode):
             await func(msg, parse_mode='Markdown', reply_markup=kb)
         else: await func("⚠️ **無法計算**\n暫時無法獲取數據，請稍後再試。", reply_markup=kb)
 
-# 🔥 專門處理 TRX 跳轉請求 (已更新正確 ID)
 async def send_trx_link(update):
     kb = [[InlineKeyboardButton("⚡️ 點擊前往 TRX 能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]]
     await update.message.reply_text(
@@ -167,7 +160,6 @@ async def send_trx_link(update):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    # 判斷文字
     if '🇨🇳 U兌人民幣' in text: await send_price_message(update, "cny")
     elif '🇹🇼 U兌台幣' in text: await send_price_message(update, "u2tw")
     elif '🚀 台幣兌U' in text: await send_price_message(update, "tw2u")
@@ -180,29 +172,55 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("price", start))
-    app.add_handler(CommandHandler("set", set_spread))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(CallbackQueryHandler(callback_handler))
+    print("🚀 Railway 機器人初始化中...")
     
-    print("🚀 Railway 機器人已啟動 (修正TRX ID版)...")
-
-    # 防崩潰重連
+    # 🔥 重要修正：將 Application 的建立放在迴圈內
+    # 這樣每次重連都是一個全新的機器人，徹底解決 Updater 初始化錯誤
     while True:
         try:
+            # 1. 建立全新的 Application 實例
+            app = Application.builder().token(TELEGRAM_TOKEN).build()
+            
+            # 2. 重新註冊所有功能
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(CommandHandler("price", start))
+            app.add_handler(CommandHandler("set", set_spread))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+            app.add_handler(CallbackQueryHandler(callback_handler))
+
+            # 3. 初始化並啟動
+            print("🔗 正在連線到 Telegram...")
+            await app.initialize()
+            await app.start()
+            
+            # 4. 開始接收訊息 (Polling)
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-            while app.updater.running:
-                await asyncio.sleep(1)
-        except (Conflict, NetworkError) as e:
-            print(f"⚠️ 偵測到連線衝突或網路錯誤，5秒後重連...")
+            print("✅ 機器人已連線！等待訊息中...")
+            
+            # 5. 讓它持續運作
+            while True:
+                await asyncio.sleep(2)
+                if not app.updater.running:
+                    break
+        
+        except Conflict:
+            print("⚠️ 偵測到『重複連線衝突』(Conflict)！")
+            print("⏳ 舊的連線還沒斷，休息 5 秒後重新建立新機器人...")
+            try:
+                # 嘗試優雅關閉
+                if 'app' in locals() and app.updater.running:
+                    await app.updater.stop()
+                    await app.stop()
+                    await app.shutdown()
+            except: pass
             await asyncio.sleep(5)
-            if app.updater.running: await app.updater.stop()
-            continue
+            continue # 重頭開始迴圈，建立新 app
+
         except Exception as e:
-            print(f"❌ 錯誤：{e}")
+            print(f"❌ 發生未預期的錯誤: {e}")
+            print("⏳ 5 秒後重試...")
             await asyncio.sleep(5)
+            continue
 
 if __name__ == '__main__':
     try: asyncio.get_event_loop().run_until_complete(main())
