@@ -5,11 +5,13 @@ import requests
 import pytz
 import os
 import json
+import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.error import Conflict, NetworkError
 
 # 雲端環境設定
 nest_asyncio.apply()
@@ -70,15 +72,15 @@ def get_binance_cny_third_price():
         return None
     except: return None
 
-# 🔥 修改點：新增 TRX 能量兌換按鈕
+# 🔥 功能選單 (這裡改用 tg:// 協議，解決瀏覽器跳轉問題)
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
          InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw")],
         [InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u"),
          InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")],
-        # 👇 新增這一行：導流到您的 TRX 機器人
-        [InlineKeyboardButton("⚡️ TRX能量兌換", url="https://t.me/kk168usdt_bot")]
+        # 👇 這裡改成 tg://resolve，手機點了會直接開機器人，不會開網頁
+        [InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=kk168usdt_bot")]
     ]
     return InlineKeyboardMarkup(kb)
 
@@ -108,8 +110,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
-    keyboard = [['🇨🇳 U兌人民幣', '💱 台幣兌人民幣'], ['🇹🇼 U兌台幣', '🚀 台幣兌U']]
+    # 🔥 這裡新增了第三排按鈕：TRX能量租賃
+    keyboard = [
+        ['🇨🇳 U兌人民幣', '💱 台幣兌人民幣'],
+        ['🇹🇼 U兌台幣', '🚀 台幣兌U'],
+        ['⚡️ TRX能量租賃']
+    ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     welcome_text = "✨ **KK 匯率報價助手已就緒**\n━━━━━━━━━━━━━━━━━━\n選擇查詢項目或直接聯絡『可愛的米果』@nk5219 👇"
     await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
 
@@ -129,18 +137,14 @@ async def send_price_message(update_or_query, mode):
     elif mode in ["u2tw", "tw2u"]:
         raw = get_bitopro_price()
         if raw:
-            # 判斷是否加碼 (tw2u 加碼, u2tw 原價)
             final = (raw + CURRENT_SPREAD) if mode == "tw2u" else raw
             title = "🚀 台幣 兌 USDT" if mode == "tw2u" else "🇹🇼 USDT 兌 台幣"
-            
-            msg = f"📋 **報價結果：{title}**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
-            msg += f"👉 **即時報價：{final:.2f} TWD**\n\n"
+            msg = f"📋 **報價結果：{title}**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{final:.2f} TWD**\n\n"
             
             if mode == "tw2u":
                 msg += f"⚠️ 本報價參考台灣銀行美元現金銀行賣出價及當下C2C市場波動浮動調整。"
             else:
                 msg += f"⚠️ 報價是參考台灣幣托實時報價"
-            
             await func(msg, parse_mode='Markdown', reply_markup=kb)
 
     elif mode == "tw2cny":
@@ -152,12 +156,24 @@ async def send_price_message(update_or_query, mode):
             await func(msg, parse_mode='Markdown', reply_markup=kb)
         else: await func("⚠️ **無法計算**\n暫時無法獲取數據，請稍後再試。", reply_markup=kb)
 
+# 🔥 專門處理 TRX 跳轉請求
+async def send_trx_link(update):
+    # 這邊一樣使用 tg:// 協議，確保直覺跳轉
+    kb = [[InlineKeyboardButton("⚡️ 點擊前往 TRX 能量兌換", url="tg://resolve?domain=kk168usdt_bot")]]
+    await update.message.reply_text(
+        "⚡️ **TRX 能量租賃服務**\n━━━━━━━━━━━━━━━━━━\n請點擊下方按鈕直接前往機器人：",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(kb)
+    )
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    # 判斷文字，決定要查價還是給連結
     if '🇨🇳 U兌人民幣' in text: await send_price_message(update, "cny")
     elif '🇹🇼 U兌台幣' in text: await send_price_message(update, "u2tw")
     elif '🚀 台幣兌U' in text: await send_price_message(update, "tw2u")
     elif '💱 台幣兌人民幣' in text: await send_price_message(update, "tw2cny")
+    elif 'TRX' in text or '租賃' in text: await send_trx_link(update) # 捕捉新按鈕
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
@@ -172,10 +188,24 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("🚀 Railway 機器人已啟動 (TRX按鈕版)...")
-    await app.initialize(); await app.start(); await app.updater.start_polling()
-    while True: await asyncio.sleep(1)
+    print("🚀 Railway 機器人已啟動 (TRX直連版)...")
+
+    # 防崩潰重連機制
+    while True:
+        try:
+            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+            while app.updater.running:
+                await asyncio.sleep(1)
+        except (Conflict, NetworkError) as e:
+            print(f"⚠️ 偵測到連線衝突或網路錯誤，5秒後重連...")
+            await asyncio.sleep(5)
+            if app.updater.running: await app.updater.stop()
+            continue
+        except Exception as e:
+            print(f"❌ 錯誤：{e}")
+            await asyncio.sleep(5)
 
 if __name__ == '__main__':
     try: asyncio.get_event_loop().run_until_complete(main())
-    except: pass
+    except KeyboardInterrupt: pass
+    except Exception: pass
