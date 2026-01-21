@@ -176,4 +176,6 @@ async def main():
     await app.initialize(); await app.start(); await app.updater.start_polling()
     while True: await asyncio.sleep(1)
 
-if __
+if __name__ == '__main__':
+    try: asyncio.get_event_loop().run_until_complete(main())
+    except: pass
