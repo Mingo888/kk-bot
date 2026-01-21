@@ -72,15 +72,15 @@ def get_binance_cny_third_price():
         return None
     except: return None
 
-# 🔥 功能選單 (這裡改用 tg:// 協議，解決瀏覽器跳轉問題)
+# 🔥 功能選單 (已更新正確 ID)
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
          InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw")],
         [InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u"),
          InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")],
-        # 👇 這裡改成 tg://resolve，手機點了會直接開機器人，不會開網頁
-        [InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=kk168usdt_bot")]
+        # 👇 這裡已更新為 KKfreetron_Bot
+        [InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]
     ]
     return InlineKeyboardMarkup(kb)
 
@@ -110,7 +110,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
-    # 🔥 這裡新增了第三排按鈕：TRX能量租賃
+    # 底部選單
     keyboard = [
         ['🇨🇳 U兌人民幣', '💱 台幣兌人民幣'],
         ['🇹🇼 U兌台幣', '🚀 台幣兌U'],
@@ -156,10 +156,9 @@ async def send_price_message(update_or_query, mode):
             await func(msg, parse_mode='Markdown', reply_markup=kb)
         else: await func("⚠️ **無法計算**\n暫時無法獲取數據，請稍後再試。", reply_markup=kb)
 
-# 🔥 專門處理 TRX 跳轉請求
+# 🔥 專門處理 TRX 跳轉請求 (已更新正確 ID)
 async def send_trx_link(update):
-    # 這邊一樣使用 tg:// 協議，確保直覺跳轉
-    kb = [[InlineKeyboardButton("⚡️ 點擊前往 TRX 能量兌換", url="tg://resolve?domain=kk168usdt_bot")]]
+    kb = [[InlineKeyboardButton("⚡️ 點擊前往 TRX 能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]]
     await update.message.reply_text(
         "⚡️ **TRX 能量租賃服務**\n━━━━━━━━━━━━━━━━━━\n請點擊下方按鈕直接前往機器人：",
         parse_mode='Markdown',
@@ -168,12 +167,12 @@ async def send_trx_link(update):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    # 判斷文字，決定要查價還是給連結
+    # 判斷文字
     if '🇨🇳 U兌人民幣' in text: await send_price_message(update, "cny")
     elif '🇹🇼 U兌台幣' in text: await send_price_message(update, "u2tw")
     elif '🚀 台幣兌U' in text: await send_price_message(update, "tw2u")
     elif '💱 台幣兌人民幣' in text: await send_price_message(update, "tw2cny")
-    elif 'TRX' in text or '租賃' in text: await send_trx_link(update) # 捕捉新按鈕
+    elif 'TRX' in text or '租賃' in text: await send_trx_link(update)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
@@ -188,9 +187,9 @@ async def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(CallbackQueryHandler(callback_handler))
     
-    print("🚀 Railway 機器人已啟動 (TRX直連版)...")
+    print("🚀 Railway 機器人已啟動 (修正TRX ID版)...")
 
-    # 防崩潰重連機制
+    # 防崩潰重連
     while True:
         try:
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
