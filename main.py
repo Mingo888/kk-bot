@@ -107,7 +107,7 @@ def get_binance_krw_price():
         return None
     except: return None
 
-# 🔥 功能選單 (修改點：3排 x 2個)
+# 🔥 功能選單 (3排 x 2個)
 def get_function_inline_kb():
     kb = [
         # 第一排：人民幣 & 韓幣
@@ -149,7 +149,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
-    # 底部鍵盤 (修改點：同步改成 3排 x 2個)
+    # 底部鍵盤 (3排 x 2個)
     keyboard = [
         ['🇨🇳 U兌人民幣', '🚀 韓幣兌U'],
         ['🇹🇼 U兌台幣', '🚀 台幣兌U'],
@@ -186,10 +186,16 @@ async def send_price_message(update_or_query, mode):
         
         if data:
             price = data['price']
-            # 韓幣 兌 U (顯示成本價)
+            
+            # 🔥 修改重點：取整數 & 四捨五入
+            price_int = int(price)           # 原價取整數 (無條件捨去小數)
+            cash_price = price * 1.01        # +1%
+            cash_price_int = int(round(cash_price)) # 四捨五入取整數
+
             msg = f"📋 **報價結果：🚀 韓幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
-            msg += f"👉 **即時報價：{price:.2f} KRW**\n"
-            msg += f"(每 1 USDT 約需 {price:.2f} 韓幣)\n\n"
+            msg += f"🏦 **即時報價：{price_int} KRW**\n"
+            msg += f"🤝 **若需韓幣現金面交服務**\n"
+            msg += f"💵 **+1%：為 {cash_price_int} KRW**\n\n"
 
             msg += f"⚠️ *來源：{source_name}*"
             if "幣安" in source_name:
@@ -251,7 +257,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (V11 3x2排版)...")
+    print("🚀 Railway 機器人初始化中 (V12 韓幣數值優化)...")
     
     while True:
         try:
