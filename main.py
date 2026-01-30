@@ -40,7 +40,9 @@ def log_to_google_sheet(user_data):
         sheet.append_row(row)
     except Exception as e: print(f"Sheet Error: {e}")
 
-# --- 價格查詢 ---
+# --- 價格查詢區 ---
+
+# 1. 台灣 BitoPro (USDT/TWD)
 def get_bitopro_price():
     url = "https://api.bitopro.com/v3/tickers/usdt_twd"
     try:
@@ -48,6 +50,7 @@ def get_bitopro_price():
         return float(data['data']['lastPrice'])
     except: return None
 
+# 2. 幣安 P2P (CNY)
 def get_binance_cny_third_price():
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
     payload = {
@@ -69,13 +72,50 @@ def get_binance_cny_third_price():
         return None
     except: return None
 
+# 3. 🔥 Bithumb (KRW) - 優先使用
+def get_bithumb_krw_price():
+    url = "https://api.bithumb.com/public/ticker/USDT_KRW"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        data = response.json()
+        if data['status'] == '0000':
+            # closing_price 即為當前最新成交價
+            return {"price": float(data['data']['closing_price']), "name": "Bithumb 交易所"}
+        return None
+    except: return None
+
+# 4. 幣安 P2P (KRW) - 備用方案
+def get_binance_krw_price():
+    url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
+    payload = {
+        "asset": "USDT", "fiat": "KRW", "merchantCheck": False, "page": 1,
+        "payTypes": [], "publisherType": None, "rows": 10, "tradeType": "BUY"
+    }
+    headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+        data = response.json()
+        ads = data.get('data', [])
+        valid_ads = [ad for ad in ads if float(ad['adv']['price']) > 1000]
+        
+        if len(valid_ads) >= 3:
+            target = valid_ads[2]
+            return {"price": float(target['adv']['price']), "name": target['advertiser']['nickName']}
+        elif valid_ads:
+            target = valid_ads[0]
+            return {"price": float(target['adv']['price']), "name": target['advertiser']['nickName']}
+        return None
+    except: return None
+
 # 🔥 功能選單
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
-         InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw")],
-        [InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u"),
-         InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")],
+         InlineKeyboardButton("🇰🇷 U兌韓幣", callback_data="switch_krw")], 
+        [InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw"),
+         InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u")],
+        [InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")],
         [InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]
     ]
     return InlineKeyboardMarkup(kb)
@@ -106,9 +146,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
     keyboard = [
-        ['🇨🇳 U兌人民幣', '💱 台幣兌人民幣'],
+        ['🇨🇳 U兌人民幣', '🇰🇷 U兌韓幣'],
         ['🇹🇼 U兌台幣', '🚀 台幣兌U'],
-        ['⚡️ TRX能量租賃']
+        ['💱 台幣兌人民幣', '⚡️ TRX能量租賃']
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -121,13 +161,37 @@ async def send_price_message(update_or_query, mode):
     kb = get_function_inline_kb()
     func = update_or_query.edit_message_text if is_query else update_or_query.message.reply_text
 
+    # 🇨🇳 CNY
     if mode == "cny":
         data = get_binance_cny_third_price()
         if data:
             msg = f"📋 **報價結果：🇨🇳 USDT 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{data['price']:.2f} CNY**\n👤 參考商家：{data['name']}\n\n⚠️ *來源：幣安 P2P (第3檔)*"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗**，請稍後再試。", reply_markup=kb)
+    
+    # 🇰🇷 KRW (Bithumb 優先 -> 失敗則轉 Binance)
+    elif mode == "krw":
+        # 1. 先試 Bithumb
+        data = get_bithumb_krw_price()
+        source_name = "Bithumb 交易所"
+        
+        # 2. 如果 Bithumb 沒抓到，改試幣安
+        if not data:
+            data = get_binance_krw_price()
+            if data:
+                # 為了區分，備註會寫是來自幣安
+                source_name = f"幣安 P2P (因Bithumb無回應)"
+        
+        if data:
+            msg = f"📋 **報價結果：🇰🇷 USDT 兌 韓幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{data['price']:.2f} KRW**\n\n⚠️ *來源：{source_name}*"
+            # 如果是幣安，才顯示商家名稱；Bithumb 則不需要
+            if "幣安" in source_name:
+                msg += f"\n👤 參考商家：{data['name']}"
+                
+            await func(msg, parse_mode='Markdown', reply_markup=kb)
+        else: await func("⚠️ **數據獲取失敗**\nBithumb 與 幣安 暫時皆無回應。", reply_markup=kb)
 
+    # 🇹🇼 TWD
     elif mode in ["u2tw", "tw2u"]:
         raw = get_bitopro_price()
         if raw:
@@ -141,6 +205,7 @@ async def send_price_message(update_or_query, mode):
                 msg += f"⚠️ 報價是參考台灣幣托實時報價"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
 
+    # 💱 Cross Rate
     elif mode == "tw2cny":
         raw_bito = get_bitopro_price()
         cny_data = get_binance_cny_third_price()
@@ -161,6 +226,7 @@ async def send_trx_link(update):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if '🇨🇳 U兌人民幣' in text: await send_price_message(update, "cny")
+    elif '🇰🇷 U兌韓幣' in text: await send_price_message(update, "krw")
     elif '🇹🇼 U兌台幣' in text: await send_price_message(update, "u2tw")
     elif '🚀 台幣兌U' in text: await send_price_message(update, "tw2u")
     elif '💱 台幣兌人民幣' in text: await send_price_message(update, "tw2cny")
@@ -168,57 +234,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
-    mode_map = {"switch_cny": "cny", "switch_u2tw": "u2tw", "switch_tw2u": "tw2u", "switch_tw2cny": "tw2cny"}
+    mode_map = {
+        "switch_cny": "cny", 
+        "switch_krw": "krw", 
+        "switch_u2tw": "u2tw", 
+        "switch_tw2u": "tw2u", 
+        "switch_tw2cny": "tw2cny"
+    }
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中...")
+    print("🚀 Railway 機器人初始化中 (Bithumb優先版)...")
     
-    # 🔥 重要修正：將 Application 的建立放在迴圈內
-    # 這樣每次重連都是一個全新的機器人，徹底解決 Updater 初始化錯誤
     while True:
         try:
-            # 1. 建立全新的 Application 實例
             app = Application.builder().token(TELEGRAM_TOKEN).build()
             
-            # 2. 重新註冊所有功能
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("price", start))
             app.add_handler(CommandHandler("set", set_spread))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
             app.add_handler(CallbackQueryHandler(callback_handler))
 
-            # 3. 初始化並啟動
             print("🔗 正在連線到 Telegram...")
             await app.initialize()
             await app.start()
             
-            # 4. 開始接收訊息 (Polling)
             await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
             print("✅ 機器人已連線！等待訊息中...")
             
-            # 5. 讓它持續運作
             while True:
                 await asyncio.sleep(2)
                 if not app.updater.running:
                     break
         
         except Conflict:
-            print("⚠️ 偵測到『重複連線衝突』(Conflict)！")
-            print("⏳ 舊的連線還沒斷，休息 5 秒後重新建立新機器人...")
+            print("⚠️ 偵測到『重複連線衝突』(Conflict)！休息 5 秒...")
             try:
-                # 嘗試優雅關閉
                 if 'app' in locals() and app.updater.running:
                     await app.updater.stop()
                     await app.stop()
                     await app.shutdown()
             except: pass
             await asyncio.sleep(5)
-            continue # 重頭開始迴圈，建立新 app
+            continue 
 
         except Exception as e:
             print(f"❌ 發生未預期的錯誤: {e}")
-            print("⏳ 5 秒後重試...")
             await asyncio.sleep(5)
             continue
 
