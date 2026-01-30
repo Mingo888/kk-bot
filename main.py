@@ -107,14 +107,18 @@ def get_binance_krw_price():
         return None
     except: return None
 
-# 🔥 功能選單 (修改點：將最後兩個按鈕合併在同一排)
+# 🔥 功能選單 (修改點：3排 x 2個)
 def get_function_inline_kb():
     kb = [
+        # 第一排：人民幣 & 韓幣
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
-         InlineKeyboardButton("🇰🇷 U兌韓幣", callback_data="switch_krw")], 
+         InlineKeyboardButton("🚀 韓幣兌U", callback_data="switch_krw2u")],
+        
+        # 第二排：台幣 (雙向)
         [InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw"),
          InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u")],
-        # 👇 這裡合併了，原本是分開的兩行
+        
+        # 第三排：台幣兌人民幣 & TRX
         [InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny"),
          InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]
     ]
@@ -145,8 +149,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
+    # 底部鍵盤 (修改點：同步改成 3排 x 2個)
     keyboard = [
-        ['🇨🇳 U兌人民幣', '🇰🇷 U兌韓幣'],
+        ['🇨🇳 U兌人民幣', '🚀 韓幣兌U'],
         ['🇹🇼 U兌台幣', '🚀 台幣兌U'],
         ['💱 台幣兌人民幣', '⚡️ TRX能量租賃']
     ]
@@ -169,8 +174,8 @@ async def send_price_message(update_or_query, mode):
             await func(msg, parse_mode='Markdown', reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗**，請稍後再試。", reply_markup=kb)
     
-    # 🇰🇷 KRW (Bithumb 優先 -> 失敗則轉 Binance)
-    elif mode == "krw":
+    # 🇰🇷 KRW (韓幣兌U)
+    elif mode == "krw2u":
         data = get_bithumb_krw_price()
         source_name = "Bithumb 交易所"
         
@@ -181,13 +186,11 @@ async def send_price_message(update_or_query, mode):
         
         if data:
             price = data['price']
-            # 🔥 修改點：計算 +1% 現金價
-            cash_price = price * 1.01
-            
-            msg = f"📋 **報價結果：🇰🇷 USDT 兌 韓幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
-            msg += f"🏦 **即時報價：{price:.2f} KRW**\n"
-            msg += f"💵 **若需韓幣現金面交+1%：{cash_price:.2f} KRW**\n\n"
-            
+            # 韓幣 兌 U (顯示成本價)
+            msg = f"📋 **報價結果：🚀 韓幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
+            msg += f"👉 **即時報價：{price:.2f} KRW**\n"
+            msg += f"(每 1 USDT 約需 {price:.2f} 韓幣)\n\n"
+
             msg += f"⚠️ *來源：{source_name}*"
             if "幣安" in source_name:
                 msg += f"\n👤 參考商家：{data['name']}"
@@ -230,7 +233,7 @@ async def send_trx_link(update):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if '🇨🇳 U兌人民幣' in text: await send_price_message(update, "cny")
-    elif '🇰🇷 U兌韓幣' in text: await send_price_message(update, "krw")
+    elif '🚀 韓幣兌U' in text: await send_price_message(update, "krw2u") 
     elif '🇹🇼 U兌台幣' in text: await send_price_message(update, "u2tw")
     elif '🚀 台幣兌U' in text: await send_price_message(update, "tw2u")
     elif '💱 台幣兌人民幣' in text: await send_price_message(update, "tw2cny")
@@ -240,7 +243,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; await query.answer()
     mode_map = {
         "switch_cny": "cny", 
-        "switch_krw": "krw", 
+        "switch_krw2u": "krw2u", 
         "switch_u2tw": "u2tw", 
         "switch_tw2u": "tw2u", 
         "switch_tw2cny": "tw2cny"
@@ -248,7 +251,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (V8 排版優化版)...")
+    print("🚀 Railway 機器人初始化中 (V11 3x2排版)...")
     
     while True:
         try:
