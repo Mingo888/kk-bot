@@ -80,7 +80,6 @@ def get_bithumb_krw_price():
         response = requests.get(url, headers=headers, timeout=5)
         data = response.json()
         if data['status'] == '0000':
-            # closing_price 即為當前最新成交價
             return {"price": float(data['data']['closing_price']), "name": "Bithumb 交易所"}
         return None
     except: return None
@@ -108,15 +107,16 @@ def get_binance_krw_price():
         return None
     except: return None
 
-# 🔥 功能選單
+# 🔥 功能選單 (修改點：將最後兩個按鈕合併在同一排)
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
          InlineKeyboardButton("🇰🇷 U兌韓幣", callback_data="switch_krw")], 
         [InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw"),
          InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u")],
-        [InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny")],
-        [InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]
+        # 👇 這裡合併了，原本是分開的兩行
+        [InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny"),
+         InlineKeyboardButton("⚡️ TRX能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]
     ]
     return InlineKeyboardMarkup(kb)
 
@@ -171,20 +171,24 @@ async def send_price_message(update_or_query, mode):
     
     # 🇰🇷 KRW (Bithumb 優先 -> 失敗則轉 Binance)
     elif mode == "krw":
-        # 1. 先試 Bithumb
         data = get_bithumb_krw_price()
         source_name = "Bithumb 交易所"
         
-        # 2. 如果 Bithumb 沒抓到，改試幣安
         if not data:
             data = get_binance_krw_price()
             if data:
-                # 為了區分，備註會寫是來自幣安
                 source_name = f"幣安 P2P (因Bithumb無回應)"
         
         if data:
-            msg = f"📋 **報價結果：🇰🇷 USDT 兌 韓幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{data['price']:.2f} KRW**\n\n⚠️ *來源：{source_name}*"
-            # 如果是幣安，才顯示商家名稱；Bithumb 則不需要
+            price = data['price']
+            # 🔥 修改點：計算 +1% 現金價
+            cash_price = price * 1.01
+            
+            msg = f"📋 **報價結果：🇰🇷 USDT 兌 韓幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
+            msg += f"🏦 **即時報價：{price:.2f} KRW**\n"
+            msg += f"💵 **若需韓幣現金面交+1%：{cash_price:.2f} KRW**\n\n"
+            
+            msg += f"⚠️ *來源：{source_name}*"
             if "幣安" in source_name:
                 msg += f"\n👤 參考商家：{data['name']}"
                 
@@ -244,7 +248,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (Bithumb優先版)...")
+    print("🚀 Railway 機器人初始化中 (V8 排版優化版)...")
     
     while True:
         try:
@@ -269,7 +273,7 @@ async def main():
                     break
         
         except Conflict:
-            print("⚠️ 偵測到『重複連線衝突』(Conflict)！休息 5 秒...")
+            print("⚠️ 偵測到『重複連線衝突』，正在重啟...")
             try:
                 if 'app' in locals() and app.updater.running:
                     await app.updater.stop()
