@@ -157,7 +157,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    welcome_text = "✨ **KK 匯率報價助手已就緒**\n━━━━━━━━━━━━━━━━━━\n選擇查詢項目或直接聯絡『可愛的米果』@nk5219 👇"
+    welcome_text = "✨ **KK 匯率報價助手已就緒**\n━━━━━━━━━━━━━━━━━━\n選擇查詢項目或直接聯絡『白資承兌商』@nk5219 👇"
     await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def send_price_message(update_or_query, mode):
@@ -301,3 +301,4 @@ if __name__ == '__main__':
     try: asyncio.get_event_loop().run_until_complete(main())
     except KeyboardInterrupt: pass
     except Exception: pass
+
