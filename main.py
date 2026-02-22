@@ -107,6 +107,23 @@ def get_binance_krw_price():
         return None
     except: return None
 
+# 5. 🔥 新增：台灣銀行 人民幣(CNY) 現金買賣中間價
+def get_taiwan_bank_cny():
+    url = "https://rate.bot.com.tw/xrt/flcsv/0/day"
+    try:
+        response = requests.get(url, timeout=5)
+        response.encoding = 'utf-8'
+        lines = response.text.splitlines()
+        for line in lines:
+            if line.startswith('CNY'):
+                cols = line.split(',')
+                cash_buy = float(cols[2])   # 現金買入
+                cash_sell = float(cols[3])  # 現金賣出
+                mid_price = (cash_buy + cash_sell) / 2 # 計算中間價
+                return {"buy": cash_buy, "sell": cash_sell, "mid": mid_price}
+        return None
+    except: return None
+
 # 🔥 功能選單 (3排 x 2個)
 def get_function_inline_kb():
     kb = [
@@ -141,6 +158,58 @@ async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ **設定成功！**\n目前的加碼值已更新為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
     except (IndexError, ValueError):
         await update.message.reply_text(f"⚠️ **格式錯誤**\n請輸入 `/set 數字`\n例如：`/set 0.5`\n\n目前數值為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
+
+# 🔥 新增：老闆專屬指令 /tc
+async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return # 非老闆直接無視，不回覆
+
+    await update.message.reply_text("⏳ 正在為您結算分析，請稍候...")
+
+    raw_bito = get_bitopro_price()
+    cny_data = get_binance_cny_third_price()
+    bot_data = get_taiwan_bank_cny()
+
+    if raw_bito and cny_data and bot_data:
+        # 計算最佳狀態成本價
+        bot_best_rate = (raw_bito + CURRENT_SPREAD) / cny_data['price']
+        mid_price = bot_data['mid']
+        now = get_taipei_now()
+
+        msg = f"🕵️‍♂️ **老闆專屬：報價結算分析**\n🕒 `{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
+        msg += f"🤖 **最佳狀態成本價**：`{bot_best_rate:.3f}`\n"
+        msg += f"🏦 **台銀現金中間價**：`{mid_price:.4f}`\n\n"
+
+        if context.args:
+            # 情況 1：輸入了特定價格 (例如 /tc 4.6)
+            try:
+                client_price = float(context.args[0])
+                cost_diff = client_price - bot_best_rate
+                cost_pct = (cost_diff / bot_best_rate) * 100
+
+                msg += f"🤝 **您兌給客戶的價**：`{client_price:.3f}`\n\n"
+                msg += f"📊 **對標您的最佳成本 ({bot_best_rate:.3f})**：\n"
+                if cost_diff >= 0:
+                    msg += f"▸ 額外獲利：`+{cost_diff:.3f}` (多賺 `+{cost_pct:.2f}%`)\n"
+                else:
+                    msg += f"▸ 讓利損耗：`{cost_diff:.3f}` (折讓 `{cost_pct:.2f}%`)\n"
+            except ValueError:
+                await update.message.reply_text("⚠️ 格式錯誤，請輸入數字，例如：`/tc 4.6`")
+                return
+        else:
+            # 情況 2：沒有輸入價格 (只打 /tc)
+            bank_diff = bot_best_rate - mid_price
+            bank_pct = (bank_diff / mid_price) * 100
+
+            msg += f"📊 **最佳成本對標台銀中間價 ({mid_price:.4f})**：\n"
+            if bank_diff >= 0:
+                msg += f"▸ 相比台銀：`+{bank_diff:.3f}` (溢價 `+{bank_pct:.2f}%`)\n"
+            else:
+                msg += f"▸ 相比台銀：`{bank_diff:.3f}` (折讓 `{bank_pct:.2f}%`)\n"
+
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("⚠️ **數據抓取失敗**，請稍後再試。")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -257,7 +326,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (V12 韓幣數值優化)...")
+    print("🚀 Railway 機器人初始化中 (V15 新增/tc指令)...")
     
     while True:
         try:
@@ -266,6 +335,7 @@ async def main():
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("price", start))
             app.add_handler(CommandHandler("set", set_spread))
+            app.add_handler(CommandHandler("tc", tc_command)) # 🔥 註冊老闆專屬指令
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
             app.add_handler(CallbackQueryHandler(callback_handler))
 
@@ -301,4 +371,3 @@ if __name__ == '__main__':
     try: asyncio.get_event_loop().run_until_complete(main())
     except KeyboardInterrupt: pass
     except Exception: pass
-
