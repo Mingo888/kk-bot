@@ -16,7 +16,8 @@ from telegram.error import Conflict, NetworkError
 nest_asyncio.apply()
 
 # --- 設定區 ---
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAFMVu3NZR4Em6VuWTUe1vdklTrn28mnZPY')
+# 🔥 這裡已經幫您換上全新的 Token！
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAHSOBz1-uBD5bzrjSP1xe3Amaky1q_juB8')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
 SHEET_NAME = 'KK報價機器人紀錄'
 CURRENT_SPREAD = 0.4 
@@ -60,8 +61,8 @@ def get_binance_cny_third_price():
         data = response.json()
         ads = data.get('data', [])
         valid_ads = [ad for ad in ads if 6.0 <= float(ad['adv']['price']) <= 9.0]
-        if len(valid_ads) >= 3: return {"price": float(target['adv']['price']), "name": target['advertiser']['nickName']}
-        elif valid_ads: return {"price": float(target['adv']['price']), "name": target['advertiser']['nickName']}
+        if len(valid_ads) >= 3: return {"price": float(valid_ads[2]['adv']['price']), "name": valid_ads[2]['advertiser']['nickName']}
+        elif valid_ads: return {"price": float(valid_ads[0]['adv']['price']), "name": valid_ads[0]['advertiser']['nickName']}
         return None
     except: return None
 
@@ -264,7 +265,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (V18 客製化報表)...")
+    print("🚀 Railway 機器人初始化中 (V19 換鑰匙復活版)...")
     while True:
         try:
             app = Application.builder().token(TELEGRAM_TOKEN).build()
