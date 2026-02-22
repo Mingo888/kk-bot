@@ -114,15 +114,15 @@ def get_taiwan_bank_cny():
         for line in lines:
             if line.startswith('CNY'):
                 cols = line.split(',')
-                # 台銀 CSV 格式：[0]幣別, [1]本行買入, [2]現金買入, [3]即期買入, [4]本行賣出, [5]現金賣出
-                cash_buy = float(cols[2])   # 正確：現金買入
-                cash_sell = float(cols[5])  # 🔥修正此處為 index 5：現金賣出
-                mid_price = (cash_buy + cash_sell) / 2 # 計算中間價
+                # 🔥 鎖定精準欄位：cols[2]是現金買入，cols[12]才是真正的現金賣出
+                cash_buy = float(cols[2])   
+                cash_sell = float(cols[12])  
+                mid_price = (cash_buy + cash_sell) / 2 
                 return {"buy": cash_buy, "sell": cash_sell, "mid": mid_price}
         return None
     except: return None
 
-# 🔥 功能選單 
+# 功能選單 
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
@@ -148,7 +148,7 @@ async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text(f"⚠️ **格式錯誤**\n目前數值為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
 
-# 🔥 老闆專屬指令：/tc 
+# 🔥 老闆專屬指令：/tc (完整邏輯修復版)
 async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
 
@@ -163,34 +163,44 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mid_price = bot_data['mid']
         now = get_taipei_now()
 
-        msg = f"🕵️‍♂️ **老闆專屬：報價結算分析**\n🕒 `{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
-        msg += f"🤖 **最佳狀態成本價**：`{bot_best_rate:.3f}`\n"
-        msg += f"🏦 **台銀現金中間價**：`{mid_price:.4f}`\n\n"
-
+        # 判斷有無輸入自訂價格
         if context.args:
             try:
                 client_price = float(context.args[0])
-                cost_diff = client_price - bot_best_rate
-                cost_pct = (cost_diff / bot_best_rate) * 100
-
-                msg += f"🤝 **您兌給客戶的價**：`{client_price:.3f}`\n\n"
-                msg += f"📊 **對標您的最佳成本 ({bot_best_rate:.3f})**：\n"
-                if cost_diff >= 0:
-                    msg += f"▸ 額外獲利：`+{cost_diff:.3f}` (多賺 `+{cost_pct:.2f}%`)\n"
-                else:
-                    msg += f"▸ 讓利損耗：`{cost_diff:.3f}` (折讓 `{cost_pct:.2f}%`)\n"
+                is_custom = True
             except ValueError:
                 await update.message.reply_text("⚠️ 格式錯誤，請輸入數字，例如：`/tc 4.6`")
                 return
         else:
-            bank_diff = bot_best_rate - mid_price
-            bank_pct = (bank_diff / mid_price) * 100
+            client_price = bot_best_rate
+            is_custom = False
 
-            msg += f"📊 **最佳成本對標台銀中間價 ({mid_price:.4f})**：\n"
-            if bank_diff >= 0:
-                msg += f"▸ 相比台銀：`+{bank_diff:.3f}` (溢價 `+{bank_pct:.2f}%`)\n"
-            else:
-                msg += f"▸ 相比台銀：`{bank_diff:.3f}` (折讓 `{bank_pct:.2f}%`)\n"
+        # 計算兩種差距
+        cost_diff = client_price - bot_best_rate
+        cost_pct = (cost_diff / bot_best_rate) * 100
+        
+        bank_diff = client_price - mid_price
+        bank_pct = (bank_diff / mid_price) * 100
+
+        msg = f"🕵️‍♂️ **老闆專屬：報價結算分析**\n🕒 `{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
+        
+        msg += f"🤖 **最佳狀態成本價**：`{bot_best_rate:.4f}`\n"
+        msg += f"🏦 **台銀現金中間價**：`{mid_price:.4f}`\n\n"
+        
+        msg += f"🤝 **您兌給客戶的價**：`{client_price:.4f}` {'(手動輸入)' if is_custom else '(預設最佳)'}\n\n"
+        
+        msg += f"📊 **結算分析**：\n"
+        msg += f"**① 對標您的最佳成本 ({bot_best_rate:.4f})**\n"
+        if cost_diff >= 0:
+            msg += f"▸ 額外獲利：`+{cost_diff:.4f}` (多賺 `+{cost_pct:.2f}%`)\n\n"
+        else:
+            msg += f"▸ 讓利損耗：`{cost_diff:.4f}` (折讓 `{cost_pct:.2f}%`)\n\n"
+
+        msg += f"**② 對標台銀中間價 ({mid_price:.4f})**\n"
+        if bank_diff >= 0:
+            msg += f"▸ 相比台銀：`+{bank_diff:.4f}` (溢價 `+{bank_pct:.2f}%`)\n"
+        else:
+            msg += f"▸ 相比台銀：`{bank_diff:.4f}` (折讓 `{bank_pct:.2f}%`)\n"
 
         await update.message.reply_text(msg, parse_mode='Markdown')
     else:
@@ -273,10 +283,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (V16 修復台銀欄位錯誤)...")
+    print("🚀 Railway 機器人初始化中 (V17 最終完美結算版)...")
+    
+    # 🔥 關鍵修復：等待 3 秒再啟動，讓舊的容器完全死透，徹底解決 Conflict 報錯！
+    await asyncio.sleep(3)
+    
     while True:
         try:
             app = Application.builder().token(TELEGRAM_TOKEN).build()
+            
             app.add_handler(CommandHandler("start", start))
             app.add_handler(CommandHandler("price", start))
             app.add_handler(CommandHandler("set", set_spread))
@@ -284,19 +299,29 @@ async def main():
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
             app.add_handler(CallbackQueryHandler(callback_handler))
 
-            await app.initialize(); await app.start()
-            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+            await app.initialize()
+            await app.start()
             
-            while True:
+            # 🔥 drop_pending_updates=True 可以自動清除重啟期間卡住的廢棄指令
+            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+            print("✅ 機器人已連線！等待訊息中...")
+            
+            while app.updater.running:
                 await asyncio.sleep(2)
-                if not app.updater.running: break
-        except Conflict:
+                
+        except Exception as e:
+            print(f"⚠️ 發生錯誤: {e}")
+        finally:
             try:
-                if 'app' in locals() and app.updater.running:
-                    await app.updater.stop(); await app.stop(); await app.shutdown()
-            except: pass
-            await asyncio.sleep(5); continue 
-        except Exception: await asyncio.sleep(5); continue
+                if 'app' in locals():
+                    if app.updater and app.updater.running:
+                        await app.updater.stop()
+                    await app.stop()
+                    await app.shutdown()
+            except:
+                pass
+            print("🔄 5 秒後嘗試重新連線...")
+            await asyncio.sleep(5)
 
 if __name__ == '__main__':
     try: asyncio.get_event_loop().run_until_complete(main())
