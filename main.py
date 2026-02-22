@@ -16,7 +16,6 @@ from telegram.error import Conflict, NetworkError
 nest_asyncio.apply()
 
 # --- 設定區 ---
-# 🔥 這裡已經幫您換上全新的 Token！
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAHSOBz1-uBD5bzrjSP1xe3Amaky1q_juB8')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
 SHEET_NAME = 'KK報價機器人紀錄'
@@ -176,7 +175,7 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             client_word = "溢價" if diff_client > 0 else "折讓"
 
             msg += f"① 台銀中價的話，成本折讓為： {mid_price:.4f}-{bot_best_rate:.4f} = {diff_bank:.4f}\n"
-            msg += f"{bank_word}{pct_bank:+.3f}%\n"
+            msg += f"{bank_word}{pct_bank:+.3f}%\n\n"
             msg += f"② 客戶價對標最佳成本：{diff_client:.4f}\n"
             msg += f"{client_word}{pct_client:+.3f}%\n"
         else:
@@ -265,7 +264,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (V19 換鑰匙復活版)...")
+    print("🚀 Railway 機器人初始化中 (V20 最終完美算式版)...")
     while True:
         try:
             app = Application.builder().token(TELEGRAM_TOKEN).build()
