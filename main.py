@@ -92,6 +92,7 @@ def get_binance_krw_price():
         return None
     except: return None
 
+# 🔥 終極修復：台銀 CSV 的現金賣出欄位是在第 13 格 (cols[12])
 def get_taiwan_bank_cny():
     url = "https://rate.bot.com.tw/xrt/flcsv/0/day"
     try:
@@ -101,8 +102,8 @@ def get_taiwan_bank_cny():
         for line in lines:
             if line.startswith('CNY'):
                 cols = line.split(',')
-                cash_buy = float(cols[2])   
-                cash_sell = float(cols[5])  
+                cash_buy = float(cols[2])   # 現金買入
+                cash_sell = float(cols[12]) # 現金賣出 (修正為 12)
                 mid_price = (cash_buy + cash_sell) / 2 
                 return {"buy": cash_buy, "sell": cash_sell, "mid": mid_price}
         return None
@@ -134,7 +135,7 @@ async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text(f"⚠️ **格式錯誤**\n目前數值為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
 
-# 🔥 老闆專屬指令：/tc (格式完全客製化) 🔥
+# 🔥 老闆專屬指令：/tc (100% 照老闆模板排版) 🔥
 async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
 
@@ -147,7 +148,6 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if raw_bito and cny_data and bot_data:
         bot_best_rate = (raw_bito + CURRENT_SPREAD) / cny_data['price']
         mid_price = bot_data['mid']
-        now = get_taipei_now()
 
         try:
             if context.args:
@@ -160,30 +160,28 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ 格式錯誤，請輸入數字，例如：`/tc 4.6`")
             return
 
-        # 1. 計算與台銀中價的差異 (公式：台銀 - 成本)
+        # 計算公式：台銀中價 - 最佳成本
         diff_bank = mid_price - bot_best_rate
         pct_bank = (diff_bank / bot_best_rate) * 100
-        bank_word = "溢價" if diff_bank > 0 else "折讓"
+        bank_word = "溢價+" if diff_bank > 0 else "折讓"
 
-        msg = f"🕵️‍♂️ **老闆專屬：報價結算分析**\n🕒 `{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
-
+        msg = ""
         if is_custom:
             # 情況 A: 輸入了 /tc 4.6
-            # 2. 計算與客戶價的差異 (公式：客戶價 - 成本)
             diff_client = client_price - bot_best_rate
             pct_client = (diff_client / bot_best_rate) * 100
-            client_word = "溢價" if diff_client > 0 else "折讓"
+            client_word = "溢價+" if diff_client > 0 else "折讓"
 
-            msg += f"① 台銀中價的話，成本折讓為： {mid_price:.4f}-{bot_best_rate:.4f} = {diff_bank:.4f}\n"
-            msg += f"{bank_word}{pct_bank:+.3f}%\n\n"
-            msg += f"② 客戶價對標最佳成本：{diff_client:.4f}\n"
-            msg += f"{client_word}{pct_client:+.3f}%\n"
+            msg += f"① 台銀中價的話，成本折讓為： {mid_price:.4f}-{bot_best_rate:.4f} = {diff_bank:.4f} (這就是您我要精確數字！)\n"
+            msg += f"{bank_word}{pct_bank:.3f}%\n"
+            msg += f"② 客戶價對標最佳成本：{diff_client:.4f} (讓您一眼看出折了多少給客戶)\n"
+            msg += f"{client_word}{pct_client:.3f}%\n"
         else:
             # 情況 B: 只輸入 /tc
-            msg += f"台銀中價的話，成本折讓為： {mid_price:.4f}-{bot_best_rate:.4f} = {diff_bank:.4f}\n"
-            msg += f"{bank_word}{pct_bank:+.3f}%\n"
+            msg += f"台銀中價的話，成本折讓為： {mid_price:.4f}-{bot_best_rate:.4f} = {diff_bank:.4f} (這就是您我要精確數字！)\n"
+            msg += f"{bank_word}{pct_bank:.3f}%\n"
 
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg)
     else:
         await update.message.reply_text("⚠️ **數據抓取失敗**，請稍後再試。")
 
@@ -264,7 +262,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
-    print("🚀 Railway 機器人初始化中 (V20 最終完美算式版)...")
+    print("🚀 Railway 機器人初始化中 (V21 台銀欄位修正 + 100%客製化)...")
     while True:
         try:
             app = Application.builder().token(TELEGRAM_TOKEN).build()
