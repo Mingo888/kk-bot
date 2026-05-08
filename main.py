@@ -37,7 +37,7 @@ def log_to_google_sheet(user_data):
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open(SHEET_NAME).sheet1
-        row = [get_taipei_now(), user_data["full_name"], str(user_data["id"]), f"@{user_data["username"]}", "啟動/查詢"]
+        row = [get_taipei_now(), user_data["full_name"], str(user_data["id"]), f"@{user_data['username']}", "啟動/查詢"]
         sheet.append_row(row)
     except Exception as e: print(f"Sheet Error: {e}")
 
@@ -97,47 +97,34 @@ def get_bithumb_krw_price():
 def get_binance_krw_price():
     return get_binance_p2p_price("KRW", price_range=(1000, None))
 
-def get_okx_myr_price():
-    url = "https://www.okx.com/priapi/v5/market/p2p/ads"
-    params = {
-        "side": "sell",
-        "quoteCurrency": "MYR",
-        "baseCurrency": "USDT",
-        "userType": "all"
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://www.okx.com/zh-hant/p2p-markets/myr/buy-usdt"
-    }
+def get_remitano_myr_price():
+    url = "https://api.remitano.com/api/v1/rates/ads"
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        response.raise_for_status() # Raise an exception for HTTP errors
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
         data = response.json()
-        
-        # OKX API response structure can vary, check both 'sell' and 'data.sell'
-        ads = data.get("sell", [])
-        if not ads and data.get("data"):
-            ads = data["data"].get("sell", [])
+        price = float(data.get("usdtmyr", {}).get("exchangeRate", 0))
+        if price > 0:
+            return {"price": price, "source": "Remitano 當地 P2P 行情"}
+        return None
+    except Exception as e:
+        print(f"Remitano Price Error: {e}")
+        return None
 
-        valid_ads = []
-        for ad in ads:
-            price = float(ad["price"])
-            # Filter out extreme prices, similar to Binance's 4.0 to 6.0 range
-            if 4.0 <= price <= 6.0:
-                valid_ads.append(ad)
-        
-        if len(valid_ads) >= 3:
-            # Return the 3rd valid ad's price and merchant name
-            return {"price": float(valid_ads[2]["price"]), "name": valid_ads[2]["advertiserName"]}
-        elif valid_ads:
-            # If less than 3 but some valid ads exist, return the first one
-            return {"price": float(valid_ads[0]["price"]), "name": valid_ads[0]["advertiserName"]}
+def get_coinbase_myr_price():
+    url = "https://api.coinbase.com/v2/prices/USDT-MYR/spot"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        price = float(data.get("data", {}).get("amount", 0))
+        if price > 0:
+            return {"price": price, "source": "Coinbase 國際指數價"}
         return None
-    except requests.exceptions.RequestException as e:
-        print(f"OKX P2P Request Error: {e}")
-        return None
-    except (KeyError, ValueError) as e:
-        print(f"OKX P2P Data Parsing Error: {e}")
+    except Exception as e:
+        print(f"Coinbase Price Error: {e}")
         return None
 
 # 🔥 核心修正：台銀中價計算
@@ -256,7 +243,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = {"full_name": user.full_name, "id": user.id, "username": user.username if user.username else "無"}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
-    keyboard = [["🇨🇳 U兌人民幣", "🚀 韓幣兌U", "🇲🇾 馬幣兌U"], ["🇹🇼 U兌台幣", "🚀 台幣兌U"], ["💱 台幣兌人民幣", "⚡️ TRX能量租賃"]]
+    keyboard = [["🇨🇳 U兌人民幣", "🚀 韓幣兌U"], ["🇲🇾 馬幣兌U", "🇹🇼 U兌台幣", "🚀 台幣兌U"], ["💱 台幣兌人民幣", "⚡️ TRX能量租賃"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     welcome_text = "✨ **KK 匯率報價助手已就緒**\n━━━━━━━━━━━━━━━━━━\n選擇查詢項目或直接聯絡『白資承兌商』@nk5219 👇"
@@ -271,7 +258,7 @@ async def send_price_message(update_or_query, mode):
     if mode == "cny":
         data = get_binance_cny_third_price()
         if data:
-            msg = f"📋 **報價結果：🇨🇳 USDT 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{data["price"]:.2f} CNY**\n👤 參考商家：{data["name"]}\n\n⚠️ *來源：幣安 P2P (第3檔)*"
+            msg = f"📋 **報價結果：🇨🇳 USDT 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{data['price']:.2f} CNY**\n👤 參考商家：{data['name']}\n\n⚠️ *來源：幣安 P2P (第3檔)*"
             await func(msg, parse_mode="Markdown", reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗**，請稍後再試。", reply_markup=kb)
     
@@ -284,7 +271,7 @@ async def send_price_message(update_or_query, mode):
         if data:
             price = data["price"]
             msg = f"📋 **報價結果：🚀 韓幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n🏦 **即時報價：{int(price)} KRW**\n🤝 **若需韓幣現金面交服務**\n💵 **+1%：為 {int(round(price * 1.01))} KRW**\n\n⚠️ *來源：{source_name}*"
-            if "幣安" in source_name: msg += f"\n👤 參考商家：{data["name"]}"
+            if "幣安" in source_name: msg += f"\n👤 參考商家：{data['name']}"
             await func(msg, parse_mode="Markdown", reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗**", reply_markup=kb)
 
@@ -299,11 +286,25 @@ async def send_price_message(update_or_query, mode):
             await func(msg, parse_mode="Markdown", reply_markup=kb)
 
     elif mode == "myr":
-        data = get_okx_myr_price()
-        if data:
-            price = data["price"]
-            markup_price = price * 1.013
-            msg = f"📋 **報價結果：🇲🇾 馬幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{price:.3f} MYR**\n🤝 **若需馬幣現金面交服務**\n💵 **+1.3%：為 {markup_price:.3f} MYR**\n\n👤 參考商家：{data["name"]}\n\n⚠️ *來源：OKX P2P (第3檔)*"
+        remitano_data = get_remitano_myr_price()
+        coinbase_data = get_coinbase_myr_price()
+        
+        price = None
+        source_name = ""
+        markup_info = ""
+
+        if remitano_data:
+            price = remitano_data["price"]
+            source_name = remitano_data["source"]
+            markup_info = "🤝 **面交價 (Remitano 實價)：無需加價**\n"
+        elif coinbase_data:
+            price = coinbase_data["price"]
+            source_name = coinbase_data["source"]
+            markup_price = price * 1.015
+            markup_info = f"🤝 **若需馬幣現金面交服務**\n💵 **+1.5%：為 {markup_price:.2f} MYR**\n"
+        
+        if price:
+            msg = f"📋 **報價結果：🇲🇾 馬幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{price:.2f} MYR**\n{markup_info}\n⚠️ *來源：{source_name}*"
             await func(msg, parse_mode="Markdown", reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗，請稍後再試**", reply_markup=kb)
 
