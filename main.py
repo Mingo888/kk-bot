@@ -16,28 +16,28 @@ from telegram.error import Conflict, NetworkError
 nest_asyncio.apply()
 
 # --- 設定區 ---
-TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAHSOBz1-uBD5bzrjSP1xe3Amaky1q_juB8')
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8429894936:AAHSOBz1-uBD5bzrjSP1xe3Amaky1q_juB8")
 ADMIN_IDS = [7767209131, 7627006763] # 預設管理員 ID 列表
-SHEET_NAME = 'KK報價機器人紀錄'
+SHEET_NAME = "KK報價機器人紀錄"
 CURRENT_SPREAD = 0.4
 
 # ----------------------------
 
 def get_taipei_now():
-    tw_tz = pytz.timezone('Asia/Taipei')
+    tw_tz = pytz.timezone("Asia/Taipei")
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 # --- Google Sheet 寫入 ---
 def log_to_google_sheet(user_data):
     try:
-        json_creds = os.getenv('GOOGLE_CREDENTIALS')
+        json_creds = os.getenv("GOOGLE_CREDENTIALS")
         if not json_creds: return
         creds_dict = json.loads(json_creds)
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         sheet = client.open(SHEET_NAME).sheet1
-        row = [get_taipei_now(), user_data['full_name'], str(user_data['id']), f"@{user_data['username']}", "啟動/查詢"]
+        row = [get_taipei_now(), user_data["full_name"], str(user_data["id"]), f"@{user_data["username"]}", "啟動/查詢"]
         sheet.append_row(row)
     except Exception as e: print(f"Sheet Error: {e}")
 
@@ -46,7 +46,7 @@ def get_bitopro_price():
     url = "https://api.bitopro.com/v3/tickers/usdt_twd"
     try:
         data = requests.get(url, timeout=5).json()
-        return float(data['data']['lastPrice'])
+        return float(data["data"]["lastPrice"])
     except: return None
 
 def get_binance_p2p_price(fiat_code, price_range=None, trade_type="BUY", rows=10):
@@ -59,11 +59,11 @@ def get_binance_p2p_price(fiat_code, price_range=None, trade_type="BUY", rows=10
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
         data = response.json()
-        ads = data.get('data', [])
+        ads = data.get("data", [])
         
         valid_ads = []
         for ad in ads:
-            price = float(ad['adv']['price'])
+            price = float(ad["adv"]["price"])
             if price_range:
                 min_price, max_price = price_range
                 if (min_price is None or price >= min_price) and \
@@ -73,9 +73,9 @@ def get_binance_p2p_price(fiat_code, price_range=None, trade_type="BUY", rows=10
                 valid_ads.append(ad)
 
         if len(valid_ads) >= 3: 
-            return {"price": float(valid_ads[2]['adv']['price']), "name": valid_ads[2]['advertiser']['nickName']}
+            return {"price": float(valid_ads[2]["adv"]["price"]), "name": valid_ads[2]["advertiser"]["nickName"]}
         elif valid_ads: 
-            return {"price": float(valid_ads[0]['adv']['price']), "name": valid_ads[0]['advertiser']['nickName']}
+            return {"price": float(valid_ads[0]["adv"]["price"]), "name": valid_ads[0]["advertiser"]["nickName"]}
         return None
     except Exception as e:
         print(f"P2P Price Error for {fiat_code}: {e}")
@@ -90,26 +90,66 @@ def get_bithumb_krw_price():
     try:
         response = requests.get(url, headers=headers, timeout=5)
         data = response.json()
-        if data['status'] == '0000': return {"price": float(data['data']['closing_price']), "name": "Bithumb 交易所"}
+        if data["status"] == "0000": return {"price": float(data["data"]["closing_price"]), "name": "Bithumb 交易所"}
         return None
     except: return None
 
 def get_binance_krw_price():
     return get_binance_p2p_price("KRW", price_range=(1000, None))
 
-def get_binance_myr_price():
-    return get_binance_p2p_price("MYR", price_range=(4.0, 6.0))
+def get_okx_myr_price():
+    url = "https://www.okx.com/priapi/v5/market/p2p/ads"
+    params = {
+        "side": "sell",
+        "quoteCurrency": "MYR",
+        "baseCurrency": "USDT",
+        "userType": "all"
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.okx.com/zh-hant/p2p-markets/myr/buy-usdt"
+    }
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status() # Raise an exception for HTTP errors
+        data = response.json()
+        
+        # OKX API response structure can vary, check both 'sell' and 'data.sell'
+        ads = data.get("sell", [])
+        if not ads and data.get("data"):
+            ads = data["data"].get("sell", [])
+
+        valid_ads = []
+        for ad in ads:
+            price = float(ad["price"])
+            # Filter out extreme prices, similar to Binance's 4.0 to 6.0 range
+            if 4.0 <= price <= 6.0:
+                valid_ads.append(ad)
+        
+        if len(valid_ads) >= 3:
+            # Return the 3rd valid ad's price and merchant name
+            return {"price": float(valid_ads[2]["price"]), "name": valid_ads[2]["advertiserName"]}
+        elif valid_ads:
+            # If less than 3 but some valid ads exist, return the first one
+            return {"price": float(valid_ads[0]["price"]), "name": valid_ads[0]["advertiserName"]}
+        return None
+    except requests.exceptions.RequestException as e:
+        print(f"OKX P2P Request Error: {e}")
+        return None
+    except (KeyError, ValueError) as e:
+        print(f"OKX P2P Data Parsing Error: {e}")
+        return None
 
 # 🔥 核心修正：台銀中價計算
 def get_taiwan_bank_cny():
     url = "https://rate.bot.com.tw/xrt/flcsv/0/day"
     try:
         response = requests.get(url, timeout=5)
-        response.encoding = 'utf-8'
+        response.encoding = "utf-8"
         lines = response.text.splitlines()
         for line in lines:
-            if line.startswith('CNY'):
-                cols = line.split(',')
+            if line.startswith("CNY"):
+                cols = line.split(",")
                 cash_buy = float(cols[2])   # 台銀現金買入
                 cash_sell = float(cols[12]) # 台銀現金賣出 (精準鎖定這格)
                 mid_price = (cash_buy + cash_sell) / 2 
@@ -134,7 +174,7 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, user):
     msg = f"🔔 **新用戶通知**\n👤 {user.full_name}\n🆔 `{user.id}`\n@{user.username}"
     for admin_id in ADMIN_IDS:
         try:
-            await context.bot.send_message(chat_id=admin_id, text=msg, parse_mode='Markdown')
+            await context.bot.send_message(chat_id=admin_id, text=msg, parse_mode="Markdown")
         except: pass
 
 async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -142,9 +182,9 @@ async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
     try:
         CURRENT_SPREAD = float(context.args[0])
-        await update.message.reply_text(f"✅ **設定成功！**\n目前的加碼值已更新為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
+        await update.message.reply_text(f"✅ **設定成功！**\n目前的加碼值已更新為：`+{CURRENT_SPREAD}`", parse_mode="Markdown")
     except:
-        await update.message.reply_text(f"⚠️ **格式錯誤**\n目前數值為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
+        await update.message.reply_text(f"⚠️ **格式錯誤**\n目前數值為：`+{CURRENT_SPREAD}`", parse_mode="Markdown")
 
 # 🔥 老闆專屬指令：/tc (格式完全客製化) 🔥
 async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,8 +197,8 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_data = get_taiwan_bank_cny()
 
     if raw_bito and cny_data and bot_data:
-        bot_best_rate = (raw_bito + CURRENT_SPREAD) / cny_data['price']
-        mid_price = bot_data['mid']
+        bot_best_rate = (raw_bito + CURRENT_SPREAD) / cny_data["price"]
+        mid_price = bot_data["mid"]
         now = get_taipei_now()
 
         try:
@@ -205,7 +245,7 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"台銀中價的話，成本折讓為： {mid_price:.4f}-{bot_best_rate:.4f} = {diff_bank:.4f}\n"
             msg += f"{bank_word}{bank_sign}{pct_bank:.3f}%\n"
 
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        await update.message.reply_text(msg, parse_mode="Markdown")
     else:
         await update.message.reply_text("⚠️ **數據抓取失敗**，請稍後再試。")
 
@@ -213,17 +253,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await notify_admin(context, user)
     
-    user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
+    user_data = {"full_name": user.full_name, "id": user.id, "username": user.username if user.username else "無"}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
     keyboard = [["🇨🇳 U兌人民幣", "🚀 韓幣兌U", "🇲🇾 馬幣兌U"], ["🇹🇼 U兌台幣", "🚀 台幣兌U"], ["💱 台幣兌人民幣", "⚡️ TRX能量租賃"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     welcome_text = "✨ **KK 匯率報價助手已就緒**\n━━━━━━━━━━━━━━━━━━\n選擇查詢項目或直接聯絡『白資承兌商』@nk5219 👇"
-    await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
+    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 async def send_price_message(update_or_query, mode):
-    is_query = hasattr(update_or_query, 'data')
+    is_query = hasattr(update_or_query, "data")
     now = get_taipei_now()
     kb = get_function_inline_kb()
     func = update_or_query.edit_message_text if is_query else update_or_query.message.reply_text
@@ -231,8 +271,8 @@ async def send_price_message(update_or_query, mode):
     if mode == "cny":
         data = get_binance_cny_third_price()
         if data:
-            msg = f"📋 **報價結果：🇨🇳 USDT 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{data['price']:.2f} CNY**\n👤 參考商家：{data['name']}\n\n⚠️ *來源：幣安 P2P (第3檔)*"
-            await func(msg, parse_mode='Markdown', reply_markup=kb)
+            msg = f"📋 **報價結果：🇨🇳 USDT 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{data["price"]:.2f} CNY**\n👤 參考商家：{data["name"]}\n\n⚠️ *來源：幣安 P2P (第3檔)*"
+            await func(msg, parse_mode="Markdown", reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗**，請稍後再試。", reply_markup=kb)
     
     elif mode == "krw2u":
@@ -242,10 +282,10 @@ async def send_price_message(update_or_query, mode):
             data = get_binance_krw_price()
             if data: source_name = f"幣安 P2P"
         if data:
-            price = data['price']
+            price = data["price"]
             msg = f"📋 **報價結果：🚀 韓幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n🏦 **即時報價：{int(price)} KRW**\n🤝 **若需韓幣現金面交服務**\n💵 **+1%：為 {int(round(price * 1.01))} KRW**\n\n⚠️ *來源：{source_name}*"
-            if "幣安" in source_name: msg += f"\n👤 參考商家：{data['name']}"
-            await func(msg, parse_mode='Markdown', reply_markup=kb)
+            if "幣安" in source_name: msg += f"\n👤 參考商家：{data["name"]}"
+            await func(msg, parse_mode="Markdown", reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗**", reply_markup=kb)
 
     elif mode in ["u2tw", "tw2u"]:
@@ -256,39 +296,39 @@ async def send_price_message(update_or_query, mode):
             msg = f"📋 **報價結果：{title}**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{final:.2f} TWD**\n\n"
             if mode == "tw2u": msg += f"⚠️ 本報價參考台灣銀行美元現金銀行賣出價及當下C2C市場波動浮動調整。"
             else: msg += f"⚠️ 報價是參考台灣幣托實時報價"
-            await func(msg, parse_mode='Markdown', reply_markup=kb)
+            await func(msg, parse_mode="Markdown", reply_markup=kb)
 
     elif mode == "myr":
-        data = get_binance_myr_price()
+        data = get_okx_myr_price()
         if data:
             price = data["price"]
             markup_price = price * 1.013
-            msg = f"📋 **報價結果：🇲🇾 馬幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{price:.3f} MYR**\n🤝 **若需馬幣現金面交服務**\n💵 **+1.3%：為 {markup_price:.3f} MYR**\n\n👤 參考商家：{data["name"]}\n\n⚠️ *來源：幣安 P2P (第3檔)*"
-            await func(msg, parse_mode='Markdown', reply_markup=kb)
+            msg = f"📋 **報價結果：🇲🇾 馬幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{price:.3f} MYR**\n🤝 **若需馬幣現金面交服務**\n💵 **+1.3%：為 {markup_price:.3f} MYR**\n\n👤 參考商家：{data["name"]}\n\n⚠️ *來源：OKX P2P (第3檔)*"
+            await func(msg, parse_mode="Markdown", reply_markup=kb)
         else: await func("⚠️ **數據獲取失敗，請稍後再試**", reply_markup=kb)
 
     elif mode == "tw2cny":
         raw_bito = get_bitopro_price()
         cny_data = get_binance_cny_third_price()
         if raw_bito and cny_data:
-            final_rate = (raw_bito + CURRENT_SPREAD) / cny_data['price']
+            final_rate = (raw_bito + CURRENT_SPREAD) / cny_data["price"]
             msg = f"📋 **報價結果：💱 台幣 兌 人民幣**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **換算匯率：{final_rate:.3f}**\n(每 1 人民幣 約需 {final_rate:.3f} 台幣)\n\n💡 *備註：是以USDT 本位計算之結果*"
-            await func(msg, parse_mode='Markdown', reply_markup=kb)
+            await func(msg, parse_mode="Markdown", reply_markup=kb)
         else: await func("⚠️ **無法計算**", reply_markup=kb)
 
 async def send_trx_link(update):
     kb = [[InlineKeyboardButton("⚡️ 點擊前往 TRX 能量兌換", url="tg://resolve?domain=KKfreetron_Bot")]]
-    await update.message.reply_text("⚡️ **TRX 能量租賃服務**\n━━━━━━━━━━━━━━━━━━\n請點擊下方按鈕直接前往機器人：", parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text("⚡️ **TRX 能量租賃服務**\n━━━━━━━━━━━━━━━━━━\n請點擊下方按鈕直接前往機器人：", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if '🇨🇳 U兌人民幣' in text: await send_price_message(update, "cny")
-    elif '🚀 韓幣兌U' in text: await send_price_message(update, "krw2u")
-    elif '🇹🇼 U兌台幣' in text: await send_price_message(update, "u2tw")
-    elif '🚀 台幣兌U' in text: await send_price_message(update, "tw2u")
-    elif '💱 台幣兌人民幣' in text: await send_price_message(update, "tw2cny")
-    elif '🇲🇾 馬幣兌U' in text: await send_price_message(update, "myr")
-    elif 'TRX' in text or '租賃' in text: await send_trx_link(update)
+    if "🇨🇳 U兌人民幣" in text: await send_price_message(update, "cny")
+    elif "🚀 韓幣兌U" in text: await send_price_message(update, "krw2u")
+    elif "🇹🇼 U兌台幣" in text: await send_price_message(update, "u2tw")
+    elif "🚀 台幣兌U" in text: await send_price_message(update, "tw2u")
+    elif "💱 台幣兌人民幣" in text: await send_price_message(update, "tw2cny")
+    elif "🇲🇾 馬幣兌U" in text: await send_price_message(update, "myr")
+    elif "TRX" in text or "租賃" in text: await send_trx_link(update)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -316,13 +356,13 @@ async def main():
                 if not app.updater.running: break
         except Conflict:
             try:
-                if 'app' in locals() and app.updater.running:
+                if "app" in locals() and app.updater.running:
                     await app.updater.stop(); await app.stop(); await app.shutdown()
             except: pass
             await asyncio.sleep(5); continue 
         except Exception: await asyncio.sleep(5); continue
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try: asyncio.get_event_loop().run_until_complete(main())
     except KeyboardInterrupt: pass
     except Exception: pass
