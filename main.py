@@ -17,9 +17,10 @@ nest_asyncio.apply()
 
 # --- 設定區 ---
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '8429894936:AAHSOBz1-uBD5bzrjSP1xe3Amaky1q_juB8')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '7767209131'))
+ADMIN_IDS = [7767209131, 7627006763] # 預設管理員 ID 列表
 SHEET_NAME = 'KK報價機器人紀錄'
-CURRENT_SPREAD = 0.4 
+CURRENT_SPREAD = 0.4
+
 # ----------------------------
 
 def get_taipei_now():
@@ -48,22 +49,40 @@ def get_bitopro_price():
         return float(data['data']['lastPrice'])
     except: return None
 
-def get_binance_cny_third_price():
+def get_binance_p2p_price(fiat_code, price_range=None, trade_type="BUY", rows=10):
     url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
     payload = {
-        "asset": "USDT", "fiat": "CNY", "merchantCheck": False, "page": 1,
-        "payTypes": [], "publisherType": None, "rows": 10, "tradeType": "BUY"
+        "asset": "USDT", "fiat": fiat_code, "merchantCheck": False, "page": 1,
+        "payTypes": [], "publisherType": None, "rows": rows, "tradeType": trade_type
     }
     headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=10)
         data = response.json()
         ads = data.get('data', [])
-        valid_ads = [ad for ad in ads if 6.0 <= float(ad['adv']['price']) <= 9.0]
-        if len(valid_ads) >= 3: return {"price": float(valid_ads[2]['adv']['price']), "name": valid_ads[2]['advertiser']['nickName']}
-        elif valid_ads: return {"price": float(valid_ads[0]['adv']['price']), "name": valid_ads[0]['advertiser']['nickName']}
+        
+        valid_ads = []
+        for ad in ads:
+            price = float(ad['adv']['price'])
+            if price_range:
+                min_price, max_price = price_range
+                if (min_price is None or price >= min_price) and \
+                   (max_price is None or price <= max_price):
+                    valid_ads.append(ad)
+            else:
+                valid_ads.append(ad)
+
+        if len(valid_ads) >= 3: 
+            return {"price": float(valid_ads[2]['adv']['price']), "name": valid_ads[2]['advertiser']['nickName']}
+        elif valid_ads: 
+            return {"price": float(valid_ads[0]['adv']['price']), "name": valid_ads[0]['advertiser']['nickName']}
         return None
-    except: return None
+    except Exception as e:
+        print(f"P2P Price Error for {fiat_code}: {e}")
+        return None
+
+def get_binance_cny_third_price():
+    return get_binance_p2p_price("CNY", price_range=(6.0, 9.0))
 
 def get_bithumb_krw_price():
     url = "https://api.bithumb.com/public/ticker/USDT_KRW"
@@ -76,21 +95,10 @@ def get_bithumb_krw_price():
     except: return None
 
 def get_binance_krw_price():
-    url = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search"
-    payload = {
-        "asset": "USDT", "fiat": "KRW", "merchantCheck": False, "page": 1,
-        "payTypes": [], "publisherType": None, "rows": 10, "tradeType": "BUY"
-    }
-    headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        data = response.json()
-        ads = data.get('data', [])
-        valid_ads = [ad for ad in ads if float(ad['adv']['price']) > 1000]
-        if len(valid_ads) >= 3: return {"price": float(valid_ads[2]['adv']['price']), "name": valid_ads[2]['advertiser']['nickName']}
-        elif valid_ads: return {"price": float(valid_ads[0]['adv']['price']), "name": valid_ads[0]['advertiser']['nickName']}
-        return None
-    except: return None
+    return get_binance_p2p_price("KRW", price_range=(1000, None))
+
+def get_binance_myr_price():
+    return get_binance_p2p_price("MYR", price_range=(4.0, 6.0))
 
 # 🔥 核心修正：台銀中價計算
 def get_taiwan_bank_cny():
@@ -113,7 +121,8 @@ def get_taiwan_bank_cny():
 def get_function_inline_kb():
     kb = [
         [InlineKeyboardButton("🇨🇳 U兌人民幣", callback_data="switch_cny"),
-         InlineKeyboardButton("🚀 韓幣兌U", callback_data="switch_krw2u")],
+         InlineKeyboardButton("🚀 韓幣兌U", callback_data="switch_krw2u"),
+         InlineKeyboardButton("🇲🇾 馬幣兌U", callback_data="switch_myr")],
         [InlineKeyboardButton("🇹🇼 U兌台幣", callback_data="switch_u2tw"),
          InlineKeyboardButton("🚀 台幣兌U", callback_data="switch_tw2u")],
         [InlineKeyboardButton("💱 台幣兌人民幣", callback_data="switch_tw2cny"),
@@ -123,12 +132,14 @@ def get_function_inline_kb():
 
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, user):
     msg = f"🔔 **新用戶通知**\n👤 {user.full_name}\n🆔 `{user.id}`\n@{user.username}"
-    try: await context.bot.send_message(chat_id=ADMIN_ID, text=msg, parse_mode='Markdown')
-    except: pass
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(chat_id=admin_id, text=msg, parse_mode='Markdown')
+        except: pass
 
 async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global CURRENT_SPREAD
-    if update.effective_user.id != ADMIN_ID: return
+    if update.effective_user.id not in ADMIN_IDS: return
     try:
         CURRENT_SPREAD = float(context.args[0])
         await update.message.reply_text(f"✅ **設定成功！**\n目前的加碼值已更新為：`+{CURRENT_SPREAD}`", parse_mode='Markdown')
@@ -137,7 +148,7 @@ async def set_spread(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 🔥 老闆專屬指令：/tc (格式完全客製化) 🔥
 async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
+    if update.effective_user.id not in ADMIN_IDS: return
 
     await update.message.reply_text("⏳ 正在為您結算分析，請稍候...")
 
@@ -205,7 +216,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = {'full_name': user.full_name, 'id': user.id, 'username': user.username if user.username else '無'}
     asyncio.get_running_loop().run_in_executor(None, log_to_google_sheet, user_data)
 
-    keyboard = [['🇨🇳 U兌人民幣', '🚀 韓幣兌U'], ['🇹🇼 U兌台幣', '🚀 台幣兌U'], ['💱 台幣兌人民幣', '⚡️ TRX能量租賃']]
+    keyboard = [["🇨🇳 U兌人民幣", "🚀 韓幣兌U", "🇲🇾 馬幣兌U"], ["🇹🇼 U兌台幣", "🚀 台幣兌U"], ["💱 台幣兌人民幣", "⚡️ TRX能量租賃"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     welcome_text = "✨ **KK 匯率報價助手已就緒**\n━━━━━━━━━━━━━━━━━━\n選擇查詢項目或直接聯絡『白資承兌商』@nk5219 👇"
@@ -247,6 +258,15 @@ async def send_price_message(update_or_query, mode):
             else: msg += f"⚠️ 報價是參考台灣幣托實時報價"
             await func(msg, parse_mode='Markdown', reply_markup=kb)
 
+    elif mode == "myr":
+        data = get_binance_myr_price()
+        if data:
+            price = data["price"]
+            markup_price = price * 1.013
+            msg = f"📋 **報價結果：🇲🇾 馬幣 兌 USDT**\n🕒 查詢時間：`{now}`\n━━━━━━━━━━━━━━━━━━\n\n👉 **即時報價：{price:.3f} MYR**\n🤝 **若需馬幣現金面交服務**\n💵 **+1.3%：為 {markup_price:.3f} MYR**\n\n👤 參考商家：{data["name"]}\n\n⚠️ *來源：幣安 P2P (第3檔)*"
+            await func(msg, parse_mode='Markdown', reply_markup=kb)
+        else: await func("⚠️ **數據獲取失敗，請稍後再試**", reply_markup=kb)
+
     elif mode == "tw2cny":
         raw_bito = get_bitopro_price()
         cny_data = get_binance_cny_third_price()
@@ -263,15 +283,17 @@ async def send_trx_link(update):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if '🇨🇳 U兌人民幣' in text: await send_price_message(update, "cny")
-    elif '🚀 韓幣兌U' in text: await send_price_message(update, "krw2u") 
+    elif '🚀 韓幣兌U' in text: await send_price_message(update, "krw2u")
     elif '🇹🇼 U兌台幣' in text: await send_price_message(update, "u2tw")
     elif '🚀 台幣兌U' in text: await send_price_message(update, "tw2u")
     elif '💱 台幣兌人民幣' in text: await send_price_message(update, "tw2cny")
+    elif '🇲🇾 馬幣兌U' in text: await send_price_message(update, "myr")
     elif 'TRX' in text or '租賃' in text: await send_trx_link(update)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query; await query.answer()
-    mode_map = {"switch_cny": "cny", "switch_krw2u": "krw2u", "switch_u2tw": "u2tw", "switch_tw2u": "tw2u", "switch_tw2cny": "tw2cny"}
+    query = update.callback_query
+    await query.answer()
+    mode_map = {"switch_cny": "cny", "switch_krw2u": "krw2u", "switch_u2tw": "u2tw", "switch_tw2u": "tw2u", "switch_tw2cny": "tw2cny", "switch_myr": "myr"}
     if query.data in mode_map: await send_price_message(query, mode_map[query.data])
 
 async def main():
