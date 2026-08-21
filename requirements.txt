@@ -1,6 +1,6 @@
-python-telegram-bot
 requests
 pytz
 nest_asyncio
 gspread
 oauth2client
+python-telegram-bot>=20,<23
