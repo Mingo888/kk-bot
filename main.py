@@ -1,11 +1,14 @@
 import asyncio
+import csv
 import html
+import io
 import json
 import os
 import random
 import shlex
 import sqlite3
 from datetime import datetime
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 import gspread
@@ -96,19 +99,10 @@ def normalize_banner_placement(value):
 
     compact = value.strip().casefold().replace(" ", "")
     aliases = {
-        "all": "all",
-        "全部": "all",
-        "所有": "all",
-        "cashflow": "cashflow",
-        "客服": "cashflow",
         "金流客服": "cashflow",
-        "💬金流客服": "cashflow",
-        "u2tw": "u2tw",
         "u兌台幣": "u2tw",
-        "🇹🇼u兌台幣": "u2tw",
-        "tw2u": "tw2u",
         "台幣兌u": "tw2u",
-        "🚀台幣兌u": "tw2u",
+        "全部": "all",
     }
     return aliases.get(compact)
 
@@ -139,17 +133,17 @@ def parse_addbanner_command(command_text):
     if len(args) not in (2, 3):
         return None, (
             "⚠️ 格式錯誤。請將圖片與以下 Caption 一起傳送：\n"
-            "/addbanner <跳轉連結> [版位分類]\n\n"
-            "版位分類可用：all、cashflow、u2tw、tw2u。"
+            "/addbanner <跳轉連結> [觸發按鈕]\n\n"
+            "觸發按鈕只能填寫：金流客服、U兌台幣、台幣兌U 或 全部。"
         )
 
     link = args[1].strip()
     if not is_valid_banner_link(link):
         return None, "⚠️ 跳轉連結必須是有效的 http://、https:// 或 tg:// 連結。"
 
-    placement = normalize_banner_placement(args[2] if len(args) == 3 else "all")
+    placement = "all" if len(args) == 2 else normalize_banner_placement(args[2])
     if placement is None:
-        return None, "⚠️ 不支援的版位分類，請使用 all、cashflow、u2tw 或 tw2u。"
+        return None, "⚠️ 不支援的觸發按鈕，請使用：金流客服、U兌台幣、台幣兌U 或 全部。"
     return {"link": link, "placement": placement}, None
 
 
@@ -223,10 +217,20 @@ def log_to_google_sheet(user_data):
 # --- 價格查詢區 ---
 def get_bitopro_price():
     url = "https://api.bitopro.com/v3/tickers/usdt_twd"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+    }
     try:
-        data = requests.get(url, timeout=5).json()
-        return float(data["data"]["lastPrice"])
-    except Exception:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        price = float(data["data"]["lastPrice"])
+        if price <= 0:
+            raise ValueError(f"Bitopro price is not positive: {price}")
+        return price
+    except Exception as error:
+        print(f"Bitopro TWD Price Error: {type(error).__name__}: {error}")
         return None
 
 
@@ -379,24 +383,160 @@ def get_coinbase_myr_price():
         return None
 
 
+class _TaiwanBankRateTableParser(HTMLParser):
+    """擷取台銀匯率表的表格文字，避免依賴脆弱的正則表達式。"""
+
+    def __init__(self):
+        super().__init__()
+        self.in_cell = False
+        self.current_cell = []
+        self.current_row = []
+        self.rows = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"td", "th"}:
+            self.in_cell = True
+            self.current_cell = []
+        elif tag == "tr":
+            self.current_row = []
+
+    def handle_data(self, data):
+        if self.in_cell:
+            value = " ".join(data.split())
+            if value:
+                self.current_cell.append(value)
+
+    def handle_endtag(self, tag):
+        if tag in {"td", "th"} and self.in_cell:
+            self.current_row.append(" ".join(self.current_cell).strip())
+            self.current_cell = []
+            self.in_cell = False
+        elif tag == "tr" and self.current_row:
+            self.rows.append(self.current_row)
+            self.current_row = []
+
+
+def _parse_taiwan_bank_html(text):
+    parser = _TaiwanBankRateTableParser()
+    parser.feed(text)
+    for row in parser.rows:
+        joined = " ".join(row).upper()
+        if "CNY" not in joined and "CHINESE YUAN" not in joined:
+            continue
+
+        # HTML 表格資料列通常為 [幣別, 現金買入, 現金賣出, 即期買入, 即期賣出, ...]。
+        numeric_values = []
+        for cell in row:
+            try:
+                numeric_values.append(float(cell.replace(",", "")))
+            except (TypeError, ValueError):
+                continue
+        if len(numeric_values) < 2:
+            continue
+
+        cash_buy, cash_sell = numeric_values[0], numeric_values[1]
+        mid_price = round((cash_buy + cash_sell) / 2, 6)
+        if cash_buy > 0 and cash_sell > 0 and mid_price > 0:
+            return {"buy": cash_buy, "sell": cash_sell, "mid": mid_price}
+    return None
+
+
 # --- 台銀中價計算 ---
 def get_taiwan_bank_cny():
-    url = "https://rate.bot.com.tw/xrt/flcsv/0/day"
+    """取得台銀 CNY 現金買入、賣出與中間價。"""
+    csv_url = "https://rate.bot.com.tw/xrt/flcsv/0/day"
+    fallback_urls = [
+        "https://rate.bot.com.tw/xrt?Lang=zh-TW",
+        "https://rate.bot.com.tw/xrt?Lang=en-US",
+        "https://rate.bot.com.tw/xrt/all/day?Lang=en-US",
+    ]
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/csv,text/plain,application/octet-stream;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://rate.bot.com.tw/xrt?Lang=zh-TW",
+        "Connection": "keep-alive",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+    }
+
     try:
-        response = requests.get(url, timeout=5)
+        response = requests.get(csv_url, headers=headers, timeout=10)
         response.raise_for_status()
-        response.encoding = "utf-8"
-        lines = response.text.splitlines()
-        for line in lines:
-            if line.startswith("CNY"):
-                cols = line.split(",")
-                cash_buy = float(cols[2])
-                cash_sell = float(cols[12])
-                mid_price = (cash_buy + cash_sell) / 2
-                return {"buy": cash_buy, "sell": cash_sell, "mid": mid_price}
-        return None
-    except Exception:
-        return None
+        if not response.content:
+            raise ValueError("台銀 CSV 回應內容為空")
+
+        content_type = response.headers.get("Content-Type", "").lower()
+        text = response.content.decode("utf-8-sig", errors="replace")
+        if "challenge validation" in text.lower() or (
+            "text/html" in content_type and "csv" not in content_type
+        ):
+            raise ValueError(
+                f"台銀 CSV 被驗證頁阻擋（Content-Type: {content_type or 'unknown'}）"
+            )
+
+        rows = list(csv.reader(io.StringIO(text)))
+        if not rows:
+            raise ValueError("台銀 CSV 沒有任何資料列")
+
+        for row in rows[1:]:
+            if not row or row[0].strip().upper() != "CNY":
+                continue
+            if len(row) <= 12:
+                raise ValueError(f"CNY CSV 欄位數不足：{len(row)}")
+
+            # 官方格式：第 3 欄為現金買入，第 13 欄為現金賣出。
+            cash_buy = float(row[2].strip())
+            cash_sell = float(row[12].strip())
+            mid_price = round((cash_buy + cash_sell) / 2, 6)
+            if cash_buy <= 0 or cash_sell <= 0 or mid_price <= 0:
+                raise ValueError(
+                    f"CNY 匯率數值無效：buy={cash_buy}, sell={cash_sell}"
+                )
+            return {"buy": cash_buy, "sell": cash_sell, "mid": mid_price}
+
+        raise LookupError("台銀 CSV 找不到 CNY 資料列")
+    except Exception as csv_error:
+        print(
+            f"Taiwan Bank CSV Error: {type(csv_error).__name__}: {csv_error}"
+        )
+
+    # CSV 被 WAF/Challenge Validation 阻擋時，改讀台銀同站官方 HTML 表格。
+    for fallback_url in fallback_urls:
+        try:
+            response = requests.get(
+                fallback_url,
+                headers={**headers, "Accept": "text/html,application/xhtml+xml"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            content_type = response.headers.get("Content-Type", "").lower()
+            text = response.content.decode("utf-8-sig", errors="replace")
+            if "challenge validation" in text.lower():
+                raise ValueError("台銀 HTML 被 Challenge Validation 阻擋")
+            if "text/html" not in content_type and "<html" not in text.lower():
+                raise ValueError(f"非 HTML 回應（Content-Type: {content_type or 'unknown'}）")
+
+            data = _parse_taiwan_bank_html(text)
+            if data:
+                print(f"Taiwan Bank CNY fallback succeeded: {fallback_url}")
+                return data
+            raise LookupError("台銀 HTML 找不到 CNY 匯率列")
+        except Exception as fallback_error:
+            print(
+                "Taiwan Bank fallback error "
+                f"({fallback_url}): {type(fallback_error).__name__}: {fallback_error}"
+            )
+
+    print("Taiwan Bank CNY Error: all official endpoints failed")
+    return None
 
 
 # --- 功能選單 ---
@@ -463,8 +603,8 @@ async def add_banner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message or not message.photo:
         await message.reply_text(
             "請將一張圖片與 Caption 同時傳送，格式：\n"
-            "/addbanner <跳轉連結> [版位分類]\n\n"
-            "版位分類可用：all、cashflow、u2tw、tw2u。"
+            "/addbanner <跳轉連結> [觸發按鈕]\n\n"
+            "觸發按鈕只能填寫：金流客服、U兌台幣、台幣兌U 或 全部。"
         )
         return
 
@@ -585,8 +725,19 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_data = get_taiwan_bank_cny()
 
     if raw_bito and cny_data and bot_data:
-        bot_best_rate = (raw_bito + CURRENT_SPREAD) / cny_data["price"]
-        mid_price = bot_data["mid"]
+        try:
+            if cny_data["price"] <= 0 or bot_data["mid"] <= 0:
+                raise ValueError(
+                    f"Invalid /tc inputs: OKX={cny_data['price']}, TaiwanBank={bot_data['mid']}"
+                )
+            bot_best_rate = (raw_bito + CURRENT_SPREAD) / cny_data["price"]
+            mid_price = bot_data["mid"]
+            if bot_best_rate <= 0:
+                raise ValueError(f"最佳成本價不是正數：{bot_best_rate}")
+        except Exception as error:
+            print(f"TC Calculation Error: {type(error).__name__}: {error}")
+            await update.message.reply_text("⚠️ **最佳成本價計算失敗**，請查看伺服器日誌。")
+            return
         now = get_taipei_now()
 
         try:
@@ -632,7 +783,38 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(msg, parse_mode="Markdown")
     else:
+        missing = []
+        if not raw_bito:
+            missing.append("Bitopro USDT/TWD")
+        if not cny_data:
+            missing.append("OKX C2C USDT/CNY")
+        if not bot_data:
+            missing.append("台銀 CNY 現金匯率")
+        print(f"TC Data Error: missing={', '.join(missing) or 'unknown'}")
         await update.message.reply_text("⚠️ **數據抓取失敗**，請稍後再試。")
+
+
+async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or update.effective_user.id != ADMIN_ID:
+        return
+
+    help_text = """👑 老闆專屬隱藏指令總覽
+
+💰 【匯率與成本控制】
+🔹 /set <數字>：動態調整「台幣兌 U」的利潤加碼空間。
+   範例：/set 0.5 (將底價 +0.5 TWD)
+🔹 /tc [數字]：對標結算分析，比對台銀現金中價與您的成本價。
+   範例 1：/tc (自動帶入系統最佳成本算利潤)
+   範例 2：/tc 4.6 (帶入 4.6 算精確折讓與損耗)
+
+📢 【廣告輪播管理】
+🔹 /addbanner <跳轉連結> [觸發按鈕]：上架廣告 (需附圖片並在說明欄填寫指令)
+   說明：按鈕請填入 金流客服、U兌台幣、台幣兌U 或 全部
+   範例：/addbanner https://example.com 金流客服
+🔹 /banners：列出全部上架中廣告的 ID、版位與跳轉連結
+🔹 /delbanner <廣告ID>：下架指定廣告
+   範例：/delbanner 12"""
+    await update.effective_message.reply_text(help_text)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -887,6 +1069,7 @@ async def main():
             app.add_handler(CommandHandler("price", start))
             app.add_handler(CommandHandler("set", set_spread))
             app.add_handler(CommandHandler("tc", tc_command))
+            app.add_handler(CommandHandler("help", admin_help))
             app.add_handler(CommandHandler("addbanner", add_banner))
             app.add_handler(CommandHandler("banners", list_banners))
             app.add_handler(CommandHandler("delbanner", delete_banner))
