@@ -11,6 +11,7 @@ from datetime import datetime
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
+import cloudscraper
 import gspread
 import nest_asyncio
 import pytz
@@ -45,6 +46,19 @@ CURRENT_SPREAD = 0.4
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ADS_DB_PATH = os.getenv("ADS_DB_PATH", os.path.join(BASE_DIR, "ads.db"))
 OKX_P2P_BOOKS_URL = "https://www.okx.com/v3/c2c/tradingOrders/books"
+TAIWAN_BANK_CSV_URL = "https://rate.bot.com.tw/xrt/flcsv/0/day"
+TAIWAN_BANK_HTML_URLS = [
+    "https://rate.bot.com.tw/xrt?Lang=zh-TW",
+    "https://rate.bot.com.tw/xrt?Lang=en-US",
+    "https://rate.bot.com.tw/xrt/all/day?Lang=en-US",
+]
+EXCHANGE_RATE_API_URL = "https://open.er-api.com/v6/latest/USD"
+FRANKFURTER_API_URL = (
+    "https://api.frankfurter.dev/v1/latest?base=USD&symbols=CNY,TWD"
+)
+RATE_CACHE_PATH = os.getenv(
+    "RATE_CACHE_PATH", os.path.join(BASE_DIR, "rate_cache.json")
+)
 
 # ----------------------------
 
@@ -441,15 +455,93 @@ def _parse_taiwan_bank_html(text):
     return None
 
 
+def _make_cny_rate(cash_buy, cash_sell, source):
+    cash_buy = float(cash_buy)
+    cash_sell = float(cash_sell)
+    if cash_buy <= 0 or cash_sell <= 0:
+        raise ValueError(f"CNY 匯率數值無效：buy={cash_buy}, sell={cash_sell}")
+    return {
+        "buy": cash_buy,
+        "sell": cash_sell,
+        "mid": round((cash_buy + cash_sell) / 2, 6),
+        "source": source,
+    }
+
+
+def _parse_taiwan_bank_csv(text):
+    rows = list(csv.reader(io.StringIO(text)))
+    if not rows:
+        raise ValueError("台銀 CSV 沒有任何資料列")
+
+    for row in rows[1:]:
+        if not row or row[0].strip().upper() != "CNY":
+            continue
+        if len(row) <= 12:
+            raise ValueError(f"CNY CSV 欄位數不足：{len(row)}")
+
+        # 官方格式：第 3 欄為現金買入，第 13 欄為現金賣出。
+        return _make_cny_rate(
+            row[2].strip(), row[12].strip(), "台灣銀行現金中價"
+        )
+    raise LookupError("台銀 CSV 找不到 CNY 資料列")
+
+
+def _is_challenge_response(text, content_type=""):
+    lowered = text.lower()
+    return "challenge validation" in lowered or (
+        "text/html" in content_type.lower() and "csv" not in content_type.lower()
+    )
+
+
+def _save_rate_cache(rate_data):
+    try:
+        cache_dir = os.path.dirname(RATE_CACHE_PATH)
+        if cache_dir:
+            os.makedirs(cache_dir, exist_ok=True)
+        payload = dict(rate_data)
+        payload["cached_at"] = get_taipei_now()
+        with open(RATE_CACHE_PATH, "w", encoding="utf-8") as cache_file:
+            json.dump(payload, cache_file, ensure_ascii=False)
+    except Exception as error:
+        print(f"Rate Cache Write Error: {type(error).__name__}: {error}")
+
+
+def _load_rate_cache():
+    try:
+        with open(RATE_CACHE_PATH, "r", encoding="utf-8") as cache_file:
+            payload = json.load(cache_file)
+        mid = float(payload["mid"])
+        if mid <= 0:
+            raise ValueError(f"快取中價不是正數：{mid}")
+        payload["buy"] = float(payload.get("buy", mid))
+        payload["sell"] = float(payload.get("sell", mid))
+        payload["mid"] = mid
+        payload["source"] = f"{payload.get('source', '公開匯率 API')}（快取）"
+        return payload
+    except Exception as error:
+        print(f"Rate Cache Read Error: {type(error).__name__}: {error}")
+        return None
+
+
+def _parse_public_rate_payload(payload, source):
+    if payload.get("result") == "error":
+        raise ValueError(
+            f"{source} API error: {payload.get('error-type', 'unknown')}"
+        )
+    rates = payload.get("rates") or {}
+    usd_cny = float(rates["CNY"])
+    usd_twd = float(rates["TWD"])
+    if usd_cny <= 0 or usd_twd <= 0:
+        raise ValueError(f"{source} 回傳無效匯率：CNY={usd_cny}, TWD={usd_twd}")
+
+    # 公開 API 是 USD base；USD/TWD ÷ USD/CNY = TWD/CNY。
+    cny_mid = usd_twd / usd_cny
+    return _make_cny_rate(cny_mid, cny_mid, source)
+
+
 # --- 台銀中價計算 ---
 def get_taiwan_bank_cny():
-    """取得台銀 CNY 現金買入、賣出與中間價。"""
-    csv_url = "https://rate.bot.com.tw/xrt/flcsv/0/day"
-    fallback_urls = [
-        "https://rate.bot.com.tw/xrt?Lang=zh-TW",
-        "https://rate.bot.com.tw/xrt?Lang=en-US",
-        "https://rate.bot.com.tw/xrt/all/day?Lang=en-US",
-    ]
+    """先以 cloudscraper 取得台銀，失敗時依序使用公開 API 與快取。"""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -468,74 +560,90 @@ def get_taiwan_bank_cny():
     }
 
     try:
-        response = requests.get(csv_url, headers=headers, timeout=10)
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "desktop": True},
+            delay=5,
+        )
+        response = scraper.get(TAIWAN_BANK_CSV_URL, headers=headers, timeout=15)
         response.raise_for_status()
         if not response.content:
             raise ValueError("台銀 CSV 回應內容為空")
-
-        content_type = response.headers.get("Content-Type", "").lower()
+        content_type = response.headers.get("Content-Type", "")
         text = response.content.decode("utf-8-sig", errors="replace")
-        if "challenge validation" in text.lower() or (
-            "text/html" in content_type and "csv" not in content_type
-        ):
+        if _is_challenge_response(text, content_type):
             raise ValueError(
-                f"台銀 CSV 被驗證頁阻擋（Content-Type: {content_type or 'unknown'}）"
+                "台銀 CSV 仍被 Challenge Validation 阻擋"
             )
+        data = _parse_taiwan_bank_csv(text)
+        _save_rate_cache(data)
+        print("Taiwan Bank CNY success via cloudscraper CSV")
+        return data
+    except Exception as error:
+        print(f"Taiwan Bank cloudscraper CSV Error: {type(error).__name__}: {error}")
 
-        rows = list(csv.reader(io.StringIO(text)))
-        if not rows:
-            raise ValueError("台銀 CSV 沒有任何資料列")
-
-        for row in rows[1:]:
-            if not row or row[0].strip().upper() != "CNY":
-                continue
-            if len(row) <= 12:
-                raise ValueError(f"CNY CSV 欄位數不足：{len(row)}")
-
-            # 官方格式：第 3 欄為現金買入，第 13 欄為現金賣出。
-            cash_buy = float(row[2].strip())
-            cash_sell = float(row[12].strip())
-            mid_price = round((cash_buy + cash_sell) / 2, 6)
-            if cash_buy <= 0 or cash_sell <= 0 or mid_price <= 0:
-                raise ValueError(
-                    f"CNY 匯率數值無效：buy={cash_buy}, sell={cash_sell}"
-                )
-            return {"buy": cash_buy, "sell": cash_sell, "mid": mid_price}
-
-        raise LookupError("台銀 CSV 找不到 CNY 資料列")
-    except Exception as csv_error:
-        print(
-            f"Taiwan Bank CSV Error: {type(csv_error).__name__}: {csv_error}"
+    try:
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "desktop": True},
+            delay=5,
         )
+        for fallback_url in TAIWAN_BANK_HTML_URLS:
+            try:
+                response = scraper.get(
+                    fallback_url,
+                    headers={**headers, "Accept": "text/html,application/xhtml+xml"},
+                    timeout=15,
+                )
+                response.raise_for_status()
+                content_type = response.headers.get("Content-Type", "")
+                text = response.content.decode("utf-8-sig", errors="replace")
+                if _is_challenge_response(text, content_type):
+                    raise ValueError("台銀 HTML 仍被 Challenge Validation 阻擋")
+                data = _parse_taiwan_bank_html(text)
+                if not data:
+                    raise LookupError("台銀 HTML 找不到 CNY 匯率列")
+                data["source"] = "台灣銀行現金中價"
+                _save_rate_cache(data)
+                print(f"Taiwan Bank CNY success via cloudscraper HTML: {fallback_url}")
+                return data
+            except Exception as error:
+                print(
+                    f"Taiwan Bank cloudscraper HTML Error ({fallback_url}): "
+                    f"{type(error).__name__}: {error}"
+                )
+    except Exception as error:
+        print(f"Cloudscraper Initialization Error: {type(error).__name__}: {error}")
 
-    # CSV 被 WAF/Challenge Validation 阻擋時，改讀台銀同站官方 HTML 表格。
-    for fallback_url in fallback_urls:
+    public_api_fallbacks = [
+        (EXCHANGE_RATE_API_URL, "ExchangeRate-API 公開匯率備援"),
+        (FRANKFURTER_API_URL, "Frankfurter 公開匯率備援"),
+    ]
+    public_headers = {
+        "User-Agent": "KK-Rate-Bot/1.0 (+https://github.com/Mingo888/kk-bot)",
+        "Accept": "application/json",
+    }
+    for api_url, source in public_api_fallbacks:
         try:
             response = requests.get(
-                fallback_url,
-                headers={**headers, "Accept": "text/html,application/xhtml+xml"},
-                timeout=10,
+                api_url, headers=public_headers, timeout=10
             )
             response.raise_for_status()
-            content_type = response.headers.get("Content-Type", "").lower()
-            text = response.content.decode("utf-8-sig", errors="replace")
-            if "challenge validation" in text.lower():
-                raise ValueError("台銀 HTML 被 Challenge Validation 阻擋")
-            if "text/html" not in content_type and "<html" not in text.lower():
-                raise ValueError(f"非 HTML 回應（Content-Type: {content_type or 'unknown'}）")
-
-            data = _parse_taiwan_bank_html(text)
-            if data:
-                print(f"Taiwan Bank CNY fallback succeeded: {fallback_url}")
-                return data
-            raise LookupError("台銀 HTML 找不到 CNY 匯率列")
-        except Exception as fallback_error:
+            payload = response.json()
+            data = _parse_public_rate_payload(payload, source)
+            _save_rate_cache(data)
+            print(f"Taiwan Bank CNY fallback API success: {source}")
+            return data
+        except Exception as error:
             print(
-                "Taiwan Bank fallback error "
-                f"({fallback_url}): {type(fallback_error).__name__}: {fallback_error}"
+                f"Public Rate API Error ({source}): "
+                f"{type(error).__name__}: {error}"
             )
 
-    print("Taiwan Bank CNY Error: all official endpoints failed")
+    cached_data = _load_rate_cache()
+    if cached_data:
+        print(f"Taiwan Bank CNY fallback cache success: {RATE_CACHE_PATH}")
+        return cached_data
+
+    print("Taiwan Bank CNY Error: cloudscraper, public APIs and cache failed")
     return None
 
 
@@ -732,6 +840,7 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             bot_best_rate = (raw_bito + CURRENT_SPREAD) / cny_data["price"]
             mid_price = bot_data["mid"]
+            bank_source = bot_data.get("source", "台灣銀行現金中價")
             if bot_best_rate <= 0:
                 raise ValueError(f"最佳成本價不是正數：{bot_best_rate}")
         except Exception as error:
@@ -758,7 +867,7 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = f"🕵️‍♂️ **老闆專屬：報價結算分析**\n🕒 `{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
         msg += f"🤖 **最佳狀態成本價**：`{bot_best_rate:.4f}`\n"
-        msg += f"🏦 **台銀現金中間價**：`{mid_price:.4f}`\n\n"
+        msg += f"🏦 **{bank_source}**：`{mid_price:.4f}`\n\n"
 
         if is_custom:
             msg += f"🤝 **您兌給客戶的價**：`{client_price:.4f}` (手動輸入)\n\n"

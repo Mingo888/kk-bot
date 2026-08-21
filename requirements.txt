@@ -1,4 +1,5 @@
 requests
+cloudscraper>=1.2.71,<2
 pytz
 nest_asyncio
 gspread
