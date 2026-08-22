@@ -116,6 +116,7 @@ def normalize_banner_placement(value):
         "金流客服": "cashflow",
         "u兌台幣": "u2tw",
         "台幣兌u": "tw2u",
+        "trx能量租賃": "trx",
         "全部": "all",
     }
     return aliases.get(compact)
@@ -127,6 +128,7 @@ def placement_label(placement):
         "cashflow": "💬 金流客服",
         "u2tw": "🇹🇼 U兌台幣",
         "tw2u": "🚀 台幣兌U",
+        "trx": "⚡ TRX能量租賃",
     }.get(placement, placement)
 
 
@@ -148,7 +150,7 @@ def parse_addbanner_command(command_text):
         return None, (
             "⚠️ 格式錯誤。請將圖片與以下 Caption 一起傳送：\n"
             "/addbanner <跳轉連結> [觸發按鈕]\n\n"
-            "觸發按鈕只能填寫：金流客服、U兌台幣、台幣兌U 或 全部。"
+            "觸發按鈕只能填寫：金流客服、U兌台幣、台幣兌U、TRX能量租賃 或 全部。"
         )
 
     link = args[1].strip()
@@ -712,7 +714,7 @@ async def add_banner(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(
             "請將一張圖片與 Caption 同時傳送，格式：\n"
             "/addbanner <跳轉連結> [觸發按鈕]\n\n"
-            "觸發按鈕只能填寫：金流客服、U兌台幣、台幣兌U 或 全部。"
+            "觸發按鈕只能填寫：金流客服、U兌台幣、台幣兌U、TRX能量租賃 或 全部。"
         )
         return
 
@@ -918,7 +920,7 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📢 【廣告輪播管理】
 🔹 /addbanner <跳轉連結> [觸發按鈕]：上架廣告 (需附圖片並在說明欄填寫指令)
-   說明：按鈕請填入 金流客服、U兌台幣、台幣兌U 或 全部
+   說明：按鈕請填入 金流客服、U兌台幣、台幣兌U、TRX能量租賃 或 全部
    範例：/addbanner https://example.com 金流客服
 🔹 /banners：列出全部上架中廣告的 ID、版位與跳轉連結
 🔹 /delbanner <廣告ID>：下架指定廣告
@@ -1102,7 +1104,7 @@ async def send_cashflow_service(update_or_query, context):
     await send_random_banner(update_or_query, context, "cashflow")
 
 
-async def send_trx_link(update):
+async def send_trx_link(update, context):
     keyboard = [
         [
             InlineKeyboardButton(
@@ -1118,6 +1120,7 @@ async def send_trx_link(update):
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+    await send_random_banner(update, context, "trx")
 
 
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1144,7 +1147,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "💬 金流客服":
         await send_cashflow_service(update, context)
     elif text == "⚡ TRX能量租賃":
-        await send_trx_link(update)
+        await send_trx_link(update, context)
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
