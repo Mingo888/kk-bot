@@ -46,6 +46,7 @@ CURRENT_SPREAD = 0.4
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ADS_DB_PATH = os.getenv("ADS_DB_PATH", os.path.join(BASE_DIR, "ads.db"))
 OKX_P2P_BOOKS_URL = "https://www.okx.com/v3/c2c/tradingOrders/books"
+MAX_TICKER_V3_URL = "https://max-api.maicoin.com/api/v3/ticker"
 TAIWAN_BANK_CSV_URL = "https://rate.bot.com.tw/xrt/flcsv/0/day"
 TAIWAN_BANK_HTML_URLS = [
     "https://rate.bot.com.tw/xrt?Lang=zh-TW",
@@ -231,23 +232,64 @@ def log_to_google_sheet(user_data):
 
 
 # --- 價格查詢區 ---
-def get_bitopro_price():
+def get_usdt_twd_price_data():
+    """優先取得 BitoPro USDT/TWD；BitoPro 不可用時改用 MAX 公開行情。"""
     url = "https://api.bitopro.com/v3/tickers/usdt_twd"
     headers = {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "KK-Rate-Bot/1.0 (+https://github.com/Mingo888/kk-bot)",
         "Accept": "application/json",
     }
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
-        price = float(data["data"]["lastPrice"])
+        ticker_data = data.get("data") if isinstance(data, dict) else None
+        if isinstance(ticker_data, list):
+            ticker = next(
+                (
+                    item
+                    for item in ticker_data
+                    if str(item.get("pair", "")).casefold() == "usdt_twd"
+                ),
+                ticker_data[0] if len(ticker_data) == 1 else None,
+            )
+        elif isinstance(ticker_data, dict):
+            ticker = ticker_data
+        else:
+            ticker = None
+        if not ticker:
+            raise ValueError("BitoPro ticker 回應中找不到 USDT/TWD 資料")
+
+        price = float(ticker["lastPrice"])
         if price <= 0:
             raise ValueError(f"Bitopro price is not positive: {price}")
-        return price
+        return {"price": price, "source": "BitoPro"}
     except Exception as error:
         print(f"Bitopro TWD Price Error: {type(error).__name__}: {error}")
+
+    try:
+        response = requests.get(
+            MAX_TICKER_V3_URL,
+            params={"market": "usdttwd"},
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        ticker = response.json()
+        price = float(ticker["last"])
+        if price <= 0:
+            raise ValueError(f"MAX USDT/TWD price is not positive: {price}")
+        print(f"USDT/TWD Price Fallback Success: MAX v3 ({price})")
+        return {"price": price, "source": "MAX"}
+    except Exception as error:
+        print(f"MAX TWD Price Fallback Error: {type(error).__name__}: {error}")
         return None
+
+
+def get_bitopro_price():
+    """相容舊呼叫端：回傳 USDT/TWD 價格數值，必要時由 MAX 備援。"""
+    quote = get_usdt_twd_price_data()
+    return quote["price"] if quote else None
 
 
 def get_binance_p2p_price(fiat_code, price_range=None, trade_type="BUY", rows=10):
@@ -830,7 +872,8 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("⏳ 正在為您結算分析，請稍候...")
 
-    raw_bito = get_bitopro_price()
+    market_data = get_usdt_twd_price_data()
+    raw_bito = market_data["price"] if market_data else None
     cny_data = get_okx_cny_third_price()
     bot_data = get_taiwan_bank_cny()
 
@@ -869,6 +912,7 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = f"🕵️‍♂️ **老闆專屬：報價結算分析**\n🕒 `{now}`\n━━━━━━━━━━━━━━━━━━\n\n"
         msg += f"🤖 **最佳狀態成本價**：`{bot_best_rate:.4f}`\n"
+        msg += f"💹 **USDT/TWD 行情來源**：`{market_data['source']}`\n"
         msg += f"🏦 **{bank_source}**：`{mid_price:.4f}`\n\n"
 
         if is_custom:
@@ -896,7 +940,7 @@ async def tc_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         missing = []
         if not raw_bito:
-            missing.append("Bitopro USDT/TWD")
+            missing.append("BitoPro/MAX USDT/TWD")
         if not cny_data:
             missing.append("OKX C2C USDT/CNY")
         if not bot_data:
@@ -1013,8 +1057,9 @@ async def send_price_message(update_or_query, context, mode):
             await func("⚠️ **數據獲取失敗**", reply_markup=keyboard)
 
     elif mode in {"u2tw", "tw2u"}:
-        raw = get_bitopro_price()
-        if raw:
+        market_data = get_usdt_twd_price_data()
+        if market_data:
+            raw = market_data["price"]
             final = (raw + CURRENT_SPREAD) if mode == "tw2u" else raw
             title = "🚀 台幣 兌 USDT" if mode == "tw2u" else "🇹🇼 USDT 兌 台幣"
             msg = (
@@ -1024,9 +1069,12 @@ async def send_price_message(update_or_query, context, mode):
                 f"👉 **即時報價：{final:.2f} TWD**\n\n"
             )
             if mode == "tw2u":
-                msg += "⚠️ 本報價參考台灣銀行美元現金銀行賣出價及當下C2C市場波動浮動調整。"
+                msg += (
+                    f"⚠️ 行情來源：{market_data['source']} USDT/TWD 即時報價，"
+                    f"並加計系統加碼 {CURRENT_SPREAD:.2f} TWD。"
+                )
             else:
-                msg += "⚠️ 報價是參考台灣幣托實時報價"
+                msg += f"⚠️ 行情來源：{market_data['source']} USDT/TWD 即時報價。"
             await func(msg, parse_mode="Markdown", reply_markup=keyboard)
             await send_random_banner(update_or_query, context, mode)
         else:
@@ -1070,16 +1118,17 @@ async def send_price_message(update_or_query, context, mode):
             )
 
     elif mode == "tw2cny":
-        raw_bito = get_bitopro_price()
+        market_data = get_usdt_twd_price_data()
         cny_data = get_okx_cny_third_price()
-        if raw_bito and cny_data:
-            final_rate = (raw_bito + CURRENT_SPREAD) / cny_data["price"]
+        if market_data and cny_data:
+            final_rate = (market_data["price"] + CURRENT_SPREAD) / cny_data["price"]
             msg = (
                 "📋 **報價結果：💱 台幣 兌 人民幣**\n"
                 f"🕒 查詢時間：`{now}`\n"
                 "━━━━━━━━━━━━━━━━━━\n\n"
                 f"👉 **換算匯率：{final_rate:.3f}**\n"
                 f"(每 1 人民幣 約需 {final_rate:.3f} 台幣)\n\n"
+                f"💹 USDT/TWD 行情來源：{market_data['source']}\n"
                 "💡 *備註：是以USDT 本位計算之結果*"
             )
             await func(msg, parse_mode="Markdown", reply_markup=keyboard)
